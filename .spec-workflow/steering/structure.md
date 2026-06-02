@@ -31,7 +31,6 @@ notification-service/                              # 后端服务 (Spring Boot)
 │       ├── health/                                #   Actuator 健康检查
 │       └── metrics/                               #   Micrometer 业务指标
 ├── src/main/resources/
-│   ├── static/admin/                              # 前端构建产物输出目录
 │   ├── application.yml
 │   └── logback-spring.xml
 ├── src/test/java/                                 # 测试套件
