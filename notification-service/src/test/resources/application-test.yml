@@ -1,0 +1,51 @@
+server:
+  port: 0
+
+spring:
+  application:
+    name: notification-service-test
+  datasource:
+    url: jdbc:h2:mem:notification_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+credential:
+  master-key: test-master-key-for-integration-test
+
+admin:
+  username: admin
+  password: admin
+
+notification:
+  worker:
+    max-worker-threads: 10
+    shutdown-await-seconds: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true

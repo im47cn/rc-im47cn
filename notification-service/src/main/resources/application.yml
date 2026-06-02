@@ -1,0 +1,77 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: notification-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/notification?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+# MyBatis-Plus
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+# Redisson
+spring.data.redis:
+  host: localhost
+  port: 6379
+
+# Credential encryption master key (MUST override via env: CREDENTIAL_MASTER_KEY)
+credential:
+  master-key: ${CREDENTIAL_MASTER_KEY:CHANGE_ME_IN_PRODUCTION}
+
+# Admin auth (override via env or external config)
+admin:
+  username: ${ADMIN_USERNAME:admin}
+  password: ${ADMIN_PASSWORD:admin}
+
+# Worker configuration
+notification:
+  worker:
+    max-worker-threads: 200
+    shutdown-await-seconds: 30
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: notification-service
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:mysql://localhost:3306/notification_dev?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  datasource:
+    url: jdbc:h2:mem:notification_test;MODE=MySQL
+    driver-class-name: org.h2.Driver

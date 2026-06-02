@@ -1,0 +1,32 @@
+# Build outputs
+notification-service/target/
+notification-admin-ui/dist/
+notification-admin-ui/node_modules/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Spec workflow (only keep specs, exclude templates and snapshots)
+.spec-workflow/templates/
+.spec-workflow/user-templates/
+.spec-workflow/approvals/
+
+# Binary documents
+docs/*.pdf
+
+# Env overrides
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+*.class
