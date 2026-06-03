@@ -1,5 +1,6 @@
 package com.rc.notification.application.admin;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.domain.translation.JsonataTranslationEngine;
 import com.rc.notification.domain.translation.TranslationEngineException;
 import com.rc.notification.interfaces.admin.dto.FullPreviewRequest;
@@ -24,9 +25,11 @@ public class SimulationService {
     private static final Logger log = LoggerFactory.getLogger(SimulationService.class);
 
     private final JsonataTranslationEngine translationEngine;
+    private final ObjectMapper objectMapper;
 
-    public SimulationService(JsonataTranslationEngine translationEngine) {
+    public SimulationService(JsonataTranslationEngine translationEngine, ObjectMapper objectMapper) {
         this.translationEngine = translationEngine;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -82,7 +85,7 @@ public class SimulationService {
             if (headerJson != null && !headerJson.isBlank()) {
                 try {
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> headerMap = new com.fasterxml.jackson.databind.ObjectMapper()
+                    Map<String, Object> headerMap = objectMapper
                             .readValue(headerJson, Map.class);
                     headerMap.forEach((k, v) -> {
                         if (v != null) headers.put(k, String.valueOf(v));
@@ -132,7 +135,7 @@ public class SimulationService {
     private String appendQueryParams(String baseUrl, String resolvedPath, String queryJson) {
         String fullUrl = buildFullUrl(baseUrl, resolvedPath);
         try {
-            Map<String, Object> queryParams = new com.fasterxml.jackson.databind.ObjectMapper()
+            Map<String, Object> queryParams = objectMapper
                     .readValue(queryJson, Map.class);
             StringBuilder sb = new StringBuilder(fullUrl);
             boolean first = !fullUrl.contains("?");

@@ -37,7 +37,7 @@ public class EventIngestionController {
             // 根据响应状态返回不同 HTTP 状态码
             return switch (response.getStatus()) {
                 case "ACCEPTED" -> ResponseEntity.ok(response);
-                case "IDEMPOTENT_HIT" -> ResponseEntity.ok(response);
+                case "IDEMPOTENT_HIT" -> ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
                 case "DEAD_LETTERED" -> ResponseEntity.status(HttpStatus.CONFLICT).body(response);
                 case "REJECTED" -> ResponseEntity.badRequest().body(response);
                 default -> ResponseEntity.ok(response);

@@ -76,9 +76,10 @@ public class DeadLetterService implements DeliveryWorker.DeadLetterHandler {
             long remainTtlMs = bucket.remainTimeToLive();
 
             // 原子改写状态，保留原 TTL
-            bucket.set(IngestionService.STATUS_DEAD_LETTERED);
             if (remainTtlMs > 0) {
-                bucket.expire(java.time.Duration.ofMillis(remainTtlMs));
+                bucket.set(IngestionService.STATUS_DEAD_LETTERED, java.time.Duration.ofMillis(remainTtlMs));
+            } else {
+                bucket.set(IngestionService.STATUS_DEAD_LETTERED, java.time.Duration.ofHours(24));
             }
 
             log.info("Redis 状态改写为 DEAD_LETTERED: bizSign={}, remainTtlMs={}",

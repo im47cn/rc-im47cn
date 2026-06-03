@@ -2,8 +2,11 @@ package com.rc.notification.interfaces.admin;
 
 import com.rc.notification.interfaces.admin.dto.LoginRequest;
 import com.rc.notification.interfaces.admin.dto.LoginResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +24,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/admin")
 public class AuthController {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
     /** Session 中标记已认证用户的属性键 */
     public static final String SESSION_ATTR_USER = "ADMIN_USER";
 
@@ -37,12 +42,21 @@ public class AuthController {
      */
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request,
-                                                HttpSession session) {
-        if (configuredUsername.equals(request.getUsername())
+                                                HttpServletRequest httpServletRequest) {
+        String username = request.getUsername();
+        if (configuredUsername.equals(username)
                 && configuredPassword.equals(request.getPassword())) {
-            session.setAttribute(SESSION_ATTR_USER, request.getUsername());
+            // Session Fixation 防护：先销毁旧 Session，再创建新 Session
+            HttpSession oldSession = httpServletRequest.getSession(false);
+            if (oldSession != null) {
+                oldSession.invalidate();
+            }
+            HttpSession newSession = httpServletRequest.getSession(true);
+            newSession.setAttribute(SESSION_ATTR_USER, username);
+            log.info("[AUTH] Login success: user={}, ip={}", username, httpServletRequest.getRemoteAddr());
             return ResponseEntity.ok(LoginResponse.ok());
         }
+        log.warn("[AUTH] Login failed: user={}, ip={}", username, httpServletRequest.getRemoteAddr());
         return ResponseEntity.ok(LoginResponse.fail("用户名或密码错误"));
     }
 

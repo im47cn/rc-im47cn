@@ -1,7 +1,5 @@
 package com.rc.notification.domain.config;
 
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
-
 import java.util.List;
 
 /**
@@ -15,16 +13,16 @@ public interface SupplierConfigDomainService {
      * 通过供应商编码获取配置（缓存优先）
      *
      * @param supplierCode 供应商唯一标识
-     * @return 供应商配置实体，不存在或已禁用返回 null
+     * @return 供应商配置领域模型，不存在或已禁用返回 null
      */
-    SupplierConfigEntity getBySupplierCode(String supplierCode);
+    SupplierConfig getBySupplierCode(String supplierCode);
 
     /**
      * 获取所有启用状态的供应商配置（缓存优先）
      *
      * @return 启用状态的供应商配置列表
      */
-    List<SupplierConfigEntity> getAllActive();
+    List<SupplierConfig> getAllActive();
 
     /**
      * 精准失效指定供应商的缓存

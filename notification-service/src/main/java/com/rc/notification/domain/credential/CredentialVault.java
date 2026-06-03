@@ -7,6 +7,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
@@ -41,16 +42,23 @@ public class CredentialVault {
     private String masterKeyBase64;
 
     private final ObjectMapper objectMapper;
+    private final Environment environment;
     private SecretKey secretKey;
 
-    public CredentialVault(ObjectMapper objectMapper) {
+    public CredentialVault(ObjectMapper objectMapper, Environment environment) {
         this.objectMapper = objectMapper;
+        this.environment = environment;
     }
 
     @PostConstruct
     public void init() {
+        boolean isDevOrTest = environment.matchesProfiles("dev", "test");
         if (masterKeyBase64 == null || masterKeyBase64.isBlank()
-                || DEFAULT_UNSAFE_KEY.equals(masterKeyBase64)) {
+                || DEFAULT_UNSAFE_KEY.equals(masterKeyBase64)
+                || masterKeyBase64.length() < 16) {
+            if (!isDevOrTest) {
+                throw new IllegalStateException("CREDENTIAL_MASTER_KEY must be configured in production");
+            }
             log.warn("凭证主密钥未配置或使用默认值，生产环境必须通过 CREDENTIAL_MASTER_KEY 环境变量注入安全密钥！");
         }
         // 将 Master Key 转为 AES-256 密钥（取前32字节或补齐）
@@ -144,6 +152,13 @@ public class CredentialVault {
         } catch (IllegalArgumentException e) {
             // 非 Base64 格式，直接使用 UTF-8 字节
             raw = keyStr.getBytes();
+        }
+        if (raw.length < 32) {
+            boolean isDevOrTest = environment.matchesProfiles("dev", "test");
+            if (!isDevOrTest) {
+                throw new IllegalArgumentException("Master key must be at least 32 bytes (256 bits)");
+            }
+            log.warn("凭证主密钥不足 32 字节，将自动补齐。生产环境必须使用 256 位密钥！");
         }
         byte[] keyBytes = new byte[32];
         System.arraycopy(raw, 0, keyBytes, 0, Math.min(raw.length, 32));

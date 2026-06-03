@@ -3,7 +3,7 @@ package com.rc.notification.infrastructure.http;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.domain.translation.JsonataTranslationEngine;
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
+import com.rc.notification.domain.config.SupplierConfig;
 import okhttp3.FormBody;
 import okhttp3.HttpUrl;
 import okhttp3.MediaType;
@@ -51,7 +51,7 @@ public class FullStackHttpRequestBuilder {
      * @param inputContext  统一只读上下文（UnifiedInputContext）
      * @return OkHttp Request 对象
      */
-    public Request buildRequest(SupplierConfigEntity config, Object inputContext) throws Exception {
+    public Request buildRequest(SupplierConfig config, Object inputContext) throws Exception {
         // 1. 计算动态 Path
         String resolvedPath = evaluateTemplate(config.getPathTemplate(), inputContext);
 
@@ -106,7 +106,7 @@ public class FullStackHttpRequestBuilder {
      * @param config 供应商配置
      * @return 衍生的 OkHttpClient（共享全局连接池）
      */
-    public OkHttpClient deriveClient(SupplierConfigEntity config) {
+    public OkHttpClient deriveClient(SupplierConfig config) {
         int connectTimeout = config.getConnectTimeoutMs() != null ? config.getConnectTimeoutMs() : 3000;
         int readTimeout = config.getReadTimeoutMs() != null ? config.getReadTimeoutMs() : 5000;
 
@@ -142,7 +142,7 @@ public class FullStackHttpRequestBuilder {
     /**
      * 根据 Content-Type 行为构建请求体
      */
-    private RequestBody buildRequestBody(SupplierConfigEntity config, Object inputContext) throws Exception {
+    private RequestBody buildRequestBody(SupplierConfig config, Object inputContext) throws Exception {
         String bodyResult = evaluateTemplate(config.getBodyTemplate(), inputContext);
         if (bodyResult == null || bodyResult.isBlank()) {
             return null;

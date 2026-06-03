@@ -3,7 +3,8 @@ package com.rc.notification.application.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
+import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
+import com.rc.notification.domain.config.SupplierConfig;
 import com.rc.notification.interfaces.api.dto.IngestResponse;
 import com.rc.notification.interfaces.api.dto.NotificationEventDto;
 import org.redisson.api.RLock;
@@ -45,13 +46,16 @@ public class IngestionService {
     private final RedissonClient redissonClient;
     private final SupplierConfigDomainService configDomainService;
     private final ObjectMapper objectMapper;
+    private final NotificationMetricsRegistry metricsRegistry;
 
     public IngestionService(RedissonClient redissonClient,
                             SupplierConfigDomainService configDomainService,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            NotificationMetricsRegistry metricsRegistry) {
         this.redissonClient = redissonClient;
         this.configDomainService = configDomainService;
         this.objectMapper = objectMapper;
+        this.metricsRegistry = metricsRegistry;
     }
 
     /**
@@ -66,8 +70,9 @@ public class IngestionService {
         String supplierCode = eventDto.getSupplierCode();
 
         // 校验供应商是否存在且启用
-        SupplierConfigEntity config = configDomainService.getBySupplierCode(supplierCode);
+        SupplierConfig config = configDomainService.getBySupplierCode(supplierCode);
         if (config == null || config.getStatus() == null || config.getStatus() != 1) {
+            metricsRegistry.recordIngest(supplierCode, "rejected");
             return IngestResponse.rejected(bizSign, "供应商不存在或未启用: " + supplierCode);
         }
 
@@ -94,6 +99,9 @@ public class IngestionService {
                 Object currentStatus = bucket.get();
                 if (currentStatus != null) {
                     String statusStr = currentStatus.toString();
+                    log.info("幂等命中，跳过重复入队: bizSign={}, supplierCode={}, currentStatus={}",
+                            bizSign, supplierCode, statusStr);
+                    metricsRegistry.recordIngest(supplierCode, "idempotent_hit");
                     if (STATUS_DEAD_LETTERED.equals(statusStr)) {
                         return IngestResponse.deadLettered(bizSign);
                     }
@@ -107,11 +115,18 @@ public class IngestionService {
                 String queueName = QUEUE_PREFIX + supplierCode;
                 RQueue<String> queue = redissonClient.getQueue(queueName);
                 String message = serializeEvent(eventDto);
-                queue.add(message);
+                try {
+                    queue.add(message);
+                } catch (Exception e) {
+                    // 入队失败，回滚已设置的 PROCESSING 状态
+                    bucket.delete();
+                    throw e;
+                }
 
                 log.info("事件入队成功: bizSign={}, supplierCode={}, traceId={}",
                         bizSign, supplierCode, eventDto.getTraceId());
 
+                metricsRegistry.recordIngest(supplierCode, "accepted");
                 return IngestResponse.accepted(bizSign);
             } finally {
                 // 5. 释放锁

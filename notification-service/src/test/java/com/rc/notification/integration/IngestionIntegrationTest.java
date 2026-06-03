@@ -111,11 +111,11 @@ class IngestionIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACCEPTED"));
 
-        // Second ingest - same biz_sign, should be IDEMPOTENT_HIT
+        // Second ingest - same biz_sign, should be IDEMPOTENT_HIT (HTTP 202)
         mockMvc.perform(post("/api/v1/notifications/ingest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(event)))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("IDEMPOTENT_HIT"));
     }
 

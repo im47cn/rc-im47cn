@@ -3,6 +3,7 @@ package com.rc.notification.application.worker;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
 import com.rc.notification.infrastructure.http.FullStackHttpRequestBuilder;
+import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +20,7 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
     private final FullStackHttpRequestBuilder requestBuilder;
     private final UnifiedInputContextBuilder contextBuilder;
     private final ObjectMapper objectMapper;
+    private final NotificationMetricsRegistry metricsRegistry;
 
     /** 可选依赖：审计日志（T10 实现后注入） */
     private DeliveryWorker.AuditLogger auditLogger;
@@ -30,12 +32,14 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
                                      SupplierConfigDomainService configDomainService,
                                      FullStackHttpRequestBuilder requestBuilder,
                                      UnifiedInputContextBuilder contextBuilder,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper,
+                                     NotificationMetricsRegistry metricsRegistry) {
         this.redissonClient = redissonClient;
         this.configDomainService = configDomainService;
         this.requestBuilder = requestBuilder;
         this.contextBuilder = contextBuilder;
         this.objectMapper = objectMapper;
+        this.metricsRegistry = metricsRegistry;
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -53,7 +57,8 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
         DeliveryWorker worker = new DeliveryWorker(
                 supplierCode, queueName, manager,
                 redissonClient, configDomainService,
-                requestBuilder, contextBuilder, objectMapper);
+                requestBuilder, contextBuilder, objectMapper,
+                metricsRegistry);
         worker.setAuditLogger(auditLogger);
         worker.setDeadLetterHandler(deadLetterHandler);
         return worker;

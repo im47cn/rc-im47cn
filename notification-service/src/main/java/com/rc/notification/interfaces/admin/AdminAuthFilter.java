@@ -39,16 +39,20 @@ public class AdminAuthFilter implements Filter {
             throws IOException, ServletException {
         HttpServletRequest httpRequest = (HttpServletRequest) request;
         HttpServletResponse httpResponse = (HttpServletResponse) response;
-        String requestUri = httpRequest.getRequestURI();
+        String path = httpRequest.getRequestURI();
+        // 标准化尾部斜杠
+        if (path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
 
         // 仅拦截 /api/v1/admin/** 路径
-        if (!requestUri.startsWith(ADMIN_PATH_PREFIX)) {
+        if (!path.startsWith(ADMIN_PATH_PREFIX)) {
             chain.doFilter(request, response);
             return;
         }
 
         // 排除登录和登出端点
-        if (LOGIN_PATH.equals(requestUri) || LOGOUT_PATH.equals(requestUri)) {
+        if (path.startsWith(LOGIN_PATH) || path.startsWith(LOGOUT_PATH)) {
             chain.doFilter(request, response);
             return;
         }

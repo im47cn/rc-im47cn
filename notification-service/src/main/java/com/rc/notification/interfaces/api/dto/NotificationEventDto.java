@@ -1,6 +1,7 @@
 package com.rc.notification.interfaces.api.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 import java.util.Map;
 
@@ -45,6 +46,7 @@ public class NotificationEventDto {
     /**
      * 业务自定义载荷
      */
+    @NotNull(message = "payload is required")
     private Map<String, Object> payload;
 
     /**

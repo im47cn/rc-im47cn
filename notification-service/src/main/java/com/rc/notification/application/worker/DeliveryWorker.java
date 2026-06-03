@@ -5,8 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.application.service.IngestionService;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
 import com.rc.notification.domain.translation.TranslationEngineException;
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
 import com.rc.notification.infrastructure.http.FullStackHttpRequestBuilder;
+import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
+import com.rc.notification.domain.config.SupplierConfig;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -44,6 +45,7 @@ public class DeliveryWorker implements Runnable {
     private final FullStackHttpRequestBuilder requestBuilder;
     private final UnifiedInputContextBuilder contextBuilder;
     private final ObjectMapper objectMapper;
+    private final NotificationMetricsRegistry metricsRegistry;
 
     /** 审计日志接口（T10 实现后注入） */
     private AuditLogger auditLogger;
@@ -58,7 +60,8 @@ public class DeliveryWorker implements Runnable {
                           SupplierConfigDomainService configDomainService,
                           FullStackHttpRequestBuilder requestBuilder,
                           UnifiedInputContextBuilder contextBuilder,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          NotificationMetricsRegistry metricsRegistry) {
         this.supplierCode = supplierCode;
         this.queueName = queueName;
         this.workerManager = workerManager;
@@ -67,6 +70,7 @@ public class DeliveryWorker implements Runnable {
         this.requestBuilder = requestBuilder;
         this.contextBuilder = contextBuilder;
         this.objectMapper = objectMapper;
+        this.metricsRegistry = metricsRegistry;
     }
 
     public void setAuditLogger(AuditLogger auditLogger) {
@@ -144,7 +148,7 @@ public class DeliveryWorker implements Runnable {
             }
 
             // 获取供应商配置
-            SupplierConfigEntity config = configDomainService.getBySupplierCode(supplierCode);
+            SupplierConfig config = configDomainService.getBySupplierCode(supplierCode);
             if (config == null || config.getStatus() == null || config.getStatus() != 1) {
                 log.warn("供应商配置不存在或已禁用，跳过: supplierCode={}", supplierCode);
                 return;
@@ -161,11 +165,14 @@ public class DeliveryWorker implements Runnable {
                 client = requestBuilder.deriveClient(config);
             } catch (TranslationEngineException e) {
                 // JSONata 错误为不可恢复的逻辑死信，直接进 DLQ
+                long jsonataElapsed = System.currentTimeMillis() - startTime;
                 log.error("JSONata 转换失败，直接进入死信: bizSign={}, error={}", bizSign, e.getMessage());
                 handleDeadLetter(bizSign, traceId, unifiedContext, retryCount,
                         "JSONata 转换失败: " + e.getMessage());
+                metricsRegistry.recordDelivery(supplierCode, "dlq");
+                metricsRegistry.recordDeliveryDuration(supplierCode, jsonataElapsed);
                 logAudit(bizSign, traceId, config, null, 0,
-                        System.currentTimeMillis() - startTime, retryCount,
+                        jsonataElapsed, retryCount,
                         "DELIVER_DLQ", "JSONata error: " + e.getMessage(), 0);
                 return;
             }
@@ -178,10 +185,17 @@ public class DeliveryWorker implements Runnable {
 
                 // 成功判定
                 if (isSuccess(config, httpCode, responseBody)) {
-                    // 成功：更新 Redis 状态为 SUCCESS，原子级缩短 TTL 至 1h
-                    statusBucket.set(IngestionService.STATUS_SUCCESS, Duration.ofHours(1));
+                    // 成功：CAS 校验当前状态为 PROCESSING 才写入 SUCCESS
+                    Object curStatus = statusBucket.get();
+                    if (curStatus != null && IngestionService.STATUS_DEAD_LETTERED.equals(curStatus.toString())) {
+                        log.warn("状态已为 DEAD_LETTERED，跳过 SUCCESS 写入: bizSign={}", bizSign);
+                    } else {
+                        statusBucket.set(IngestionService.STATUS_SUCCESS, Duration.ofHours(1));
+                    }
                     log.info("投递成功: bizSign={}, httpCode={}, elapsed={}ms",
                             bizSign, httpCode, elapsed);
+                    metricsRegistry.recordDelivery(supplierCode, "success");
+                    metricsRegistry.recordDeliveryDuration(supplierCode, elapsed);
                     logAudit(bizSign, traceId, config, request.url().toString(), httpCode,
                             elapsed, retryCount, "DELIVER_SUCCESS", null, 0);
                 } else {
@@ -205,7 +219,7 @@ public class DeliveryWorker implements Runnable {
             if (bizSign != null) {
                 try {
                     Map<String, Object> eventMeta = objectMapper.readValue(eventJson, new TypeReference<>() {});
-                    SupplierConfigEntity config = configDomainService.getBySupplierCode(supplierCode);
+                    SupplierConfig config = configDomainService.getBySupplierCode(supplierCode);
                     if (config != null) {
                         handleFailure(eventJson, eventMeta, config, blockingQueue, delayedQueue,
                                 bizSign, traceId, unifiedContext, retryCount,
@@ -222,7 +236,7 @@ public class DeliveryWorker implements Runnable {
      * 处理投递失败：指数退避重试或进入死信
      */
     private void handleFailure(String eventJson, Map<String, Object> eventMeta,
-                               SupplierConfigEntity config,
+                               SupplierConfig config,
                                RBlockingQueue<String> blockingQueue,
                                RDelayedQueue<String> delayedQueue,
                                String bizSign, String traceId,
@@ -237,6 +251,8 @@ public class DeliveryWorker implements Runnable {
             String errorSummary = String.format("Max retry exhausted: %d %s",
                     httpCode, truncate(errorMsg, 200));
             handleDeadLetter(bizSign, traceId, unifiedContext, retryCount, errorSummary);
+            metricsRegistry.recordDelivery(supplierCode, "dlq");
+            metricsRegistry.recordDeliveryDuration(supplierCode, elapsed);
             logAudit(bizSign, traceId, config, actualUrl, httpCode,
                     elapsed, retryCount, "DELIVER_DLQ", errorSummary, 0);
         } else {
@@ -252,6 +268,8 @@ public class DeliveryWorker implements Runnable {
                 String errorSummary = String.format("%d %s", httpCode, truncate(errorMsg, 200));
                 log.warn("投递失败，{}ms 后重试: bizSign={}, retryCount={}, error={}",
                         delay, bizSign, retryCount, errorSummary);
+                metricsRegistry.recordDelivery(supplierCode, "failed");
+                metricsRegistry.recordDeliveryDuration(supplierCode, elapsed);
                 logAudit(bizSign, traceId, config, actualUrl, httpCode,
                         elapsed, retryCount, "DELIVER_FAILED", errorSummary, delay);
             } catch (Exception e) {
@@ -264,7 +282,7 @@ public class DeliveryWorker implements Runnable {
      * 计算指数退避延迟
      * T_delay = min(initial_ms * multiplier ^ retry_count, max_ms)
      */
-    private long calculateBackoffDelay(SupplierConfigEntity config, int retryCount) {
+    private long calculateBackoffDelay(SupplierConfig config, int retryCount) {
         int initialMs = config.getRetryBackoffInitialMs() != null ? config.getRetryBackoffInitialMs() : 1000;
         BigDecimal multiplier = config.getRetryBackoffMultiplier() != null
                 ? config.getRetryBackoffMultiplier() : BigDecimal.valueOf(2.0);
@@ -277,7 +295,7 @@ public class DeliveryWorker implements Runnable {
     /**
      * 成功判定逻辑
      */
-    private boolean isSuccess(SupplierConfigEntity config, int httpCode, String responseBody) {
+    private boolean isSuccess(SupplierConfig config, int httpCode, String responseBody) {
         // 1. 检查 HTTP 状态码
         String successCodes = config.getSuccessHttpCodes() != null ? config.getSuccessHttpCodes() : "200";
         Set<Integer> codeSet = Arrays.stream(successCodes.split(","))
@@ -330,7 +348,7 @@ public class DeliveryWorker implements Runnable {
     /**
      * 记录审计日志
      */
-    private void logAudit(String bizSign, String traceId, SupplierConfigEntity config,
+    private void logAudit(String bizSign, String traceId, SupplierConfig config,
                           String actualUrl, int httpCode, long elapsed, int retryCount,
                           String auditStatus, String errorSummary, long nextRetryDelayMs) {
         if (auditLogger != null) {

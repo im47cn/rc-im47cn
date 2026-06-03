@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.rc.notification.application.event.SupplierConfigActivatedEvent;
+import com.rc.notification.application.event.SupplierConfigDeactivatedEvent;
+import com.rc.notification.domain.config.SupplierConfig;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
 import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
 import com.rc.notification.infrastructure.persistence.mapper.SupplierConfigMapper;
@@ -34,14 +36,14 @@ public class SupplierConfigCacheManager implements SupplierConfigDomainService {
     private final ApplicationEventPublisher eventPublisher;
 
     /**
-     * 单供应商缓存：supplierCode -> SupplierConfigEntity
+     * 单供应商缓存：supplierCode -> SupplierConfig
      */
-    private final Cache<String, SupplierConfigEntity> configCache;
+    private final Cache<String, SupplierConfig> configCache;
 
     /**
      * 全量活跃配置列表缓存
      */
-    private final Cache<String, List<SupplierConfigEntity>> activeListCache;
+    private final Cache<String, List<SupplierConfig>> activeListCache;
 
     private static final String ACTIVE_LIST_KEY = "ALL_ACTIVE";
 
@@ -67,12 +69,12 @@ public class SupplierConfigCacheManager implements SupplierConfigDomainService {
     }
 
     @Override
-    public SupplierConfigEntity getBySupplierCode(String supplierCode) {
+    public SupplierConfig getBySupplierCode(String supplierCode) {
         return configCache.get(supplierCode, this::loadFromDb);
     }
 
     @Override
-    public List<SupplierConfigEntity> getAllActive() {
+    public List<SupplierConfig> getAllActive() {
         return activeListCache.get(ACTIVE_LIST_KEY, key -> loadAllActiveFromDb());
     }
 
@@ -82,10 +84,10 @@ public class SupplierConfigCacheManager implements SupplierConfigDomainService {
         configCache.invalidate(supplierCode);
         activeListCache.invalidate(ACTIVE_LIST_KEY);
 
-        // Cache Miss 回源加载，触发配置就绪事件
-        SupplierConfigEntity config = getBySupplierCode(supplierCode);
-        if (config != null && config.getStatus() != null && config.getStatus() == 1) {
-            eventPublisher.publishEvent(new SupplierConfigActivatedEvent(this, config));
+        // Cache Miss 回源加载，根据状态发布启用/停用事件
+        SupplierConfig config = getBySupplierCode(supplierCode);
+        if (config != null) {
+            publishConfigChangeEvent(config);
         }
     }
 
@@ -109,16 +111,15 @@ public class SupplierConfigCacheManager implements SupplierConfigDomainService {
         LambdaQueryWrapper<SupplierConfigEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.gt(SupplierConfigEntity::getUpdateTime, lastScan);
 
-        List<SupplierConfigEntity> changedConfigs = supplierConfigMapper.selectList(wrapper);
-        if (!changedConfigs.isEmpty()) {
-            log.info("看门狗扫描发现 {} 条配置变更", changedConfigs.size());
-            for (SupplierConfigEntity config : changedConfigs) {
+        List<SupplierConfigEntity> changedEntities = supplierConfigMapper.selectList(wrapper);
+        if (!changedEntities.isEmpty()) {
+            log.info("看门狗扫描发现 {} 条配置变更", changedEntities.size());
+            for (SupplierConfigEntity entity : changedEntities) {
+                SupplierConfig config = SupplierConfig.fromEntity(entity);
                 configCache.invalidate(config.getSupplierCode());
                 // 重新加载并放入缓存
                 configCache.put(config.getSupplierCode(), config);
-                if (config.getStatus() != null && config.getStatus() == 1) {
-                    eventPublisher.publishEvent(new SupplierConfigActivatedEvent(this, config));
-                }
+                publishConfigChangeEvent(config);
             }
             activeListCache.invalidate(ACTIVE_LIST_KEY);
         }
@@ -127,20 +128,33 @@ public class SupplierConfigCacheManager implements SupplierConfigDomainService {
     }
 
     /**
+     * 根据配置状态发布对应的领域事件
+     */
+    private void publishConfigChangeEvent(SupplierConfig config) {
+        if (config.getStatus() != null && config.getStatus() == 1) {
+            eventPublisher.publishEvent(new SupplierConfigActivatedEvent(this, config));
+        } else {
+            eventPublisher.publishEvent(new SupplierConfigDeactivatedEvent(this, config.getSupplierCode()));
+        }
+    }
+
+    /**
      * 从数据库加载单个供应商配置
      */
-    private SupplierConfigEntity loadFromDb(String supplierCode) {
+    private SupplierConfig loadFromDb(String supplierCode) {
         LambdaQueryWrapper<SupplierConfigEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(SupplierConfigEntity::getSupplierCode, supplierCode);
-        return supplierConfigMapper.selectOne(wrapper);
+        return SupplierConfig.fromEntity(supplierConfigMapper.selectOne(wrapper));
     }
 
     /**
      * 从数据库加载所有启用状态的供应商配置
      */
-    private List<SupplierConfigEntity> loadAllActiveFromDb() {
+    private List<SupplierConfig> loadAllActiveFromDb() {
         LambdaQueryWrapper<SupplierConfigEntity> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(SupplierConfigEntity::getStatus, 1);
-        return supplierConfigMapper.selectList(wrapper);
+        return supplierConfigMapper.selectList(wrapper).stream()
+                .map(SupplierConfig::fromEntity)
+                .toList();
     }
 }

@@ -169,8 +169,8 @@ public class DlqManagementService {
             String message = objectMapper.writeValueAsString(contextMap);
             queue.add(message);
         } catch (Exception e) {
-            // 入队失败，回滚 Redis 状态
-            bucket.set(IngestionService.STATUS_DEAD_LETTERED);
+            // 入队失败，回滚 Redis 状态（保留 TTL）
+            bucket.set(IngestionService.STATUS_DEAD_LETTERED, Duration.ofHours(24));
             throw new RuntimeException("重新入队失败: " + e.getMessage(), e);
         }
 

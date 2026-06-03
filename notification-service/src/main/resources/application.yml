@@ -1,13 +1,17 @@
 server:
   port: 8080
+  servlet:
+    session:
+      cookie:
+        same-site: lax
 
 spring:
   application:
     name: notification-service
   datasource:
     url: jdbc:mysql://localhost:3306/notification?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-    username: root
-    password: root
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
@@ -51,7 +55,7 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
+      show-details: when_authorized
       probes:
         enabled: true
   health:

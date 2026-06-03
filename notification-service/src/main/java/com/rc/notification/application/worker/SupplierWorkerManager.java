@@ -1,8 +1,10 @@
 package com.rc.notification.application.worker;
 
 import com.rc.notification.application.event.SupplierConfigActivatedEvent;
+import com.rc.notification.application.event.SupplierConfigDeactivatedEvent;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
+import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
+import com.rc.notification.domain.config.SupplierConfig;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,14 +14,15 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 供应商 Worker 管理器
@@ -34,6 +37,7 @@ public class SupplierWorkerManager implements SmartLifecycle {
 
     private final SupplierConfigDomainService configDomainService;
     private final RedissonClient redissonClient;
+    private final NotificationMetricsRegistry metricsRegistry;
 
     @Value("${notification.worker.max-worker-threads:200}")
     private int maxWorkerThreads;
@@ -42,14 +46,9 @@ public class SupplierWorkerManager implements SmartLifecycle {
     private int shutdownAwaitSeconds;
 
     /**
-     * 常驻线程注册表：supplierCode -> Worker 线程列表
+     * 常驻线程注册表：supplierCode -> Worker Future 列表
      */
-    private final ConcurrentHashMap<String, List<Thread>> workerRegistry = new ConcurrentHashMap<>();
-
-    /**
-     * 当前活跃 Worker 线程总数
-     */
-    private final AtomicInteger activeWorkerCount = new AtomicInteger(0);
+    private final ConcurrentHashMap<String, List<Future<?>>> workerRegistry = new ConcurrentHashMap<>();
 
     /**
      * 停机标志位
@@ -72,9 +71,11 @@ public class SupplierWorkerManager implements SmartLifecycle {
     private DeliveryWorkerFactory deliveryWorkerFactory;
 
     public SupplierWorkerManager(SupplierConfigDomainService configDomainService,
-                                 RedissonClient redissonClient) {
+                                 RedissonClient redissonClient,
+                                 NotificationMetricsRegistry metricsRegistry) {
         this.configDomainService = configDomainService;
         this.redissonClient = redissonClient;
+        this.metricsRegistry = metricsRegistry;
     }
 
     /**
@@ -129,7 +130,6 @@ public class SupplierWorkerManager implements SmartLifecycle {
 
         // 4. 资源释放
         workerRegistry.clear();
-        activeWorkerCount.set(0);
         log.info("SupplierWorkerManager 优雅停机完成");
 
         callback.run();
@@ -152,10 +152,10 @@ public class SupplierWorkerManager implements SmartLifecycle {
      * 系统启动时初始化各渠道 Worker
      */
     public void initAndLaunchWorkers() {
-        List<SupplierConfigEntity> activeConfigs = configDomainService.getAllActive();
+        List<SupplierConfig> activeConfigs = configDomainService.getAllActive();
         log.info("初始化 Worker，发现 {} 个活跃供应商", activeConfigs.size());
 
-        for (SupplierConfigEntity config : activeConfigs) {
+        for (SupplierConfig config : activeConfigs) {
             try {
                 launchWorkersForSupplier(config);
             } catch (WorkerCapacityExhaustedException e) {
@@ -166,37 +166,70 @@ public class SupplierWorkerManager implements SmartLifecycle {
     }
 
     /**
-     * 响应新渠道激活事件，动态拉起新 Worker
+     * 响应供应商启用事件，按需调整 Worker 线程数
+     * <p>
+     * 策略：
+     * - 新供应商首次启用：全量拉起
+     * - 并发数增加：仅补齐新增线程
+     * - 并发数减少：优雅退出多余线程
+     * - 并发数不变：不重启（配置变更通过缓存刷新自动生效）
      */
     @EventListener
     public void handleConfigActivatedEvent(SupplierConfigActivatedEvent event) {
-        SupplierConfigEntity config = event.getConfig();
-        if (config == null || config.getStatus() == null || config.getStatus() != 1) {
-            // 禁用的供应商，停止其 Worker
-            if (config != null) {
-                stopWorkersForSupplier(config.getSupplierCode());
+        String supplierCode = event.getConfig() != null ? event.getConfig().getSupplierCode() : null;
+        if (supplierCode == null) return;
+
+        // 从领域服务重新获取最新配置
+        SupplierConfig config = configDomainService.getBySupplierCode(supplierCode);
+        if (config == null) return;
+
+        int desiredConcurrency = config.getWorkerConcurrency() != null ? config.getWorkerConcurrency() : 1;
+        List<Future<?>> currentFutures = workerRegistry.get(supplierCode);
+        int currentCount = currentFutures != null ? currentFutures.size() : 0;
+
+        if (currentCount == 0) {
+            // 新供应商首次启用，全量拉起
+            log.info("收到配置启用事件: supplierCode={}, 首次拉起 {} 个 Worker", supplierCode, desiredConcurrency);
+            try {
+                launchWorkersForSupplier(config);
+            } catch (WorkerCapacityExhaustedException e) {
+                log.error("Worker 容量耗尽，无法为供应商 {} 拉起线程: {}", supplierCode, e.getMessage());
             }
-            return;
-        }
-
-        log.info("收到配置激活事件: supplierCode={}", config.getSupplierCode());
-
-        // 先停止旧 Worker（如果存在），再拉起新的
-        stopWorkersForSupplier(config.getSupplierCode());
-
-        try {
-            launchWorkersForSupplier(config);
-        } catch (WorkerCapacityExhaustedException e) {
-            log.error("Worker 容量耗尽，无法为供应商 {} 拉起线程: {}",
-                    config.getSupplierCode(), e.getMessage());
+        } else if (desiredConcurrency > currentCount) {
+            // 扩容：补齐新增线程
+            int toAdd = desiredConcurrency - currentCount;
+            log.info("供应商 {} 扩容: {} -> {}，补齐 {} 个 Worker", supplierCode, currentCount, desiredConcurrency, toAdd);
+            try {
+                scaleUpWorkers(supplierCode, currentFutures, toAdd);
+            } catch (WorkerCapacityExhaustedException e) {
+                log.error("Worker 容量耗尽，无法为供应商 {} 扩容: {}", supplierCode, e.getMessage());
+            }
+        } else if (desiredConcurrency < currentCount) {
+            // 缩容：优雅退出多余线程
+            int toRemove = currentCount - desiredConcurrency;
+            log.info("供应商 {} 缩容: {} -> {}，优雅退出 {} 个 Worker", supplierCode, currentCount, desiredConcurrency, toRemove);
+            scaleDownWorkers(supplierCode, currentFutures, toRemove);
+        } else {
+            // 并发数不变，其他配置变更通过缓存刷新自动生效，无需重启
+            log.info("供应商 {} 配置变更，Worker 数量不变({}), 无需重启", supplierCode, currentCount);
         }
     }
 
     /**
-     * 查询当前活跃 Worker 线程总数
+     * 响应供应商停用事件，停止对应 Worker
+     */
+    @EventListener
+    public void handleConfigDeactivatedEvent(SupplierConfigDeactivatedEvent event) {
+        String supplierCode = event.getSupplierCode();
+        log.info("收到配置停用事件: supplierCode={}", supplierCode);
+        stopWorkersForSupplier(supplierCode);
+    }
+
+    /**
+     * 查询当前活跃 Worker 线程总数（基于 workerRegistry 实际大小计算）
      */
     public int getActiveWorkerCount() {
-        return activeWorkerCount.get();
+        return workerRegistry.values().stream().mapToInt(List::size).sum();
     }
 
     /**
@@ -218,18 +251,19 @@ public class SupplierWorkerManager implements SmartLifecycle {
     /**
      * 为指定供应商拉起 Worker 线程
      */
-    private void launchWorkersForSupplier(SupplierConfigEntity config) {
+    private void launchWorkersForSupplier(SupplierConfig config) {
         String supplierCode = config.getSupplierCode();
         int concurrency = config.getWorkerConcurrency() != null ? config.getWorkerConcurrency() : 1;
 
-        // 容量检查
-        if (activeWorkerCount.get() + concurrency > maxWorkerThreads) {
+        // 容量检查（基于 workerRegistry 实际大小）
+        int currentCount = getActiveWorkerCount();
+        if (currentCount + concurrency > maxWorkerThreads) {
             throw new WorkerCapacityExhaustedException(
                     String.format("活跃线程总数 %d + 请求 %d 超过硬上限 %d",
-                            activeWorkerCount.get(), concurrency, maxWorkerThreads));
+                            currentCount, concurrency, maxWorkerThreads));
         }
 
-        List<Thread> threads = new ArrayList<>();
+        List<Future<?>> futures = Collections.synchronizedList(new ArrayList<>());
         String queueName = "queue:notification:" + supplierCode;
 
         for (int i = 0; i < concurrency; i++) {
@@ -239,57 +273,114 @@ public class SupplierWorkerManager implements SmartLifecycle {
             if (deliveryWorkerFactory != null) {
                 workerTask = deliveryWorkerFactory.create(supplierCode, queueName, this);
             } else {
-                // T9 尚未实现时的占位 Worker
-                final int idx = i;
-                workerTask = () -> {
-                    log.info("占位 Worker 启动: {} (等待 DeliveryWorker 实现)", threadName);
-                    while (!shutdownRequested.get()) {
-                        try {
-                            Thread.sleep(5000);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                    log.info("占位 Worker 停止: {}", threadName);
-                };
+                workerTask = createPlaceholderWorker(threadName);
             }
 
-            Thread thread = new Thread(workerTask, threadName);
-            thread.setDaemon(true);
-            threads.add(thread);
+            // 包装 Runnable 以设置线程名
+            Runnable namedTask = () -> {
+                Thread.currentThread().setName(threadName);
+                workerTask.run();
+            };
+
+            Future<?> future = workerExecutor.submit(namedTask);
+            futures.add(future);
         }
 
-        workerRegistry.put(supplierCode, threads);
-        activeWorkerCount.addAndGet(concurrency);
+        workerRegistry.put(supplierCode, futures);
 
-        // 提交到线程池执行
-        for (Thread thread : threads) {
-            if (workerExecutor != null && !workerExecutor.isShutdown()) {
-                workerExecutor.submit(thread);
-            } else {
-                thread.start();
-            }
-        }
+        // 注册队列深度 Gauge
+        metricsRegistry.registerQueueDepthGauge(supplierCode);
 
         log.info("为供应商 {} 拉起 {} 个 Worker 线程，当前总数: {}",
-                supplierCode, concurrency, activeWorkerCount.get());
+                supplierCode, concurrency, getActiveWorkerCount());
     }
 
     /**
-     * 停止指定供应商的 Worker 线程
+     * 停止指定供应商的全部 Worker 线程
      */
     private void stopWorkersForSupplier(String supplierCode) {
-        List<Thread> threads = workerRegistry.remove(supplierCode);
-        if (threads != null && !threads.isEmpty()) {
-            int count = threads.size();
-            for (Thread thread : threads) {
-                thread.interrupt();
+        List<Future<?>> futures = workerRegistry.remove(supplierCode);
+        if (futures != null && !futures.isEmpty()) {
+            int count = futures.size();
+            for (Future<?> future : futures) {
+                future.cancel(true);
             }
-            activeWorkerCount.addAndGet(-count);
             log.info("停止供应商 {} 的 {} 个 Worker 线程，当前总数: {}",
-                    supplierCode, count, activeWorkerCount.get());
+                    supplierCode, count, getActiveWorkerCount());
         }
+    }
+
+    /**
+     * 扩容：为指定供应商补齐新增 Worker 线程
+     */
+    private void scaleUpWorkers(String supplierCode, List<Future<?>> currentFutures, int toAdd) {
+        // 容量检查
+        int currentTotal = getActiveWorkerCount();
+        if (currentTotal + toAdd > maxWorkerThreads) {
+            throw new WorkerCapacityExhaustedException(
+                    String.format("活跃线程总数 %d + 请求 %d 超过硬上限 %d",
+                            currentTotal, toAdd, maxWorkerThreads));
+        }
+
+        String queueName = "queue:notification:" + supplierCode;
+        int baseIndex = currentFutures.size();
+
+        for (int i = 0; i < toAdd; i++) {
+            String threadName = "worker-" + supplierCode + "-" + (baseIndex + i);
+            Runnable workerTask;
+
+            if (deliveryWorkerFactory != null) {
+                workerTask = deliveryWorkerFactory.create(supplierCode, queueName, this);
+            } else {
+                workerTask = createPlaceholderWorker(threadName);
+            }
+
+            Runnable namedTask = () -> {
+                Thread.currentThread().setName(threadName);
+                workerTask.run();
+            };
+
+            Future<?> future = workerExecutor.submit(namedTask);
+            currentFutures.add(future);
+        }
+
+        log.info("供应商 {} 扩容完成，当前线程数: {}，全局总数: {}",
+                supplierCode, currentFutures.size(), getActiveWorkerCount());
+    }
+
+    /**
+     * 缩容：优雅退出指定供应商的多余 Worker 线程（从列表尾部移除）
+     * <p>
+     * 通过 cancel(true) 发送中断信号，Worker 在当前投递完成后检测中断并退出
+     */
+    private void scaleDownWorkers(String supplierCode, List<Future<?>> currentFutures, int toRemove) {
+        // 从尾部逐个优雅取消（中断信号让 Worker 完成当前任务后退出）
+        for (int i = 0; i < toRemove; i++) {
+            int lastIndex = currentFutures.size() - 1;
+            Future<?> future = currentFutures.remove(lastIndex);
+            future.cancel(true);
+        }
+
+        log.info("供应商 {} 缩容完成，当前线程数: {}，全局总数: {}",
+                supplierCode, currentFutures.size(), getActiveWorkerCount());
+    }
+
+    /**
+     * 创建占位 Worker（DeliveryWorkerFactory 未注入时使用）
+     */
+    private Runnable createPlaceholderWorker(String threadName) {
+        return () -> {
+            log.info("占位 Worker 启动: {} (等待 DeliveryWorker 实现)", threadName);
+            while (!shutdownRequested.get()) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            log.info("占位 Worker 停止: {}", threadName);
+        };
     }
 
     /**

@@ -44,7 +44,7 @@ public class NotificationMetricsRegistry {
     private final ConcurrentHashMap<String, Timer> deliveryTimers = new ConcurrentHashMap<>();
 
     public NotificationMetricsRegistry(MeterRegistry meterRegistry,
-                                       SupplierWorkerManager workerManager,
+                                       @org.springframework.context.annotation.Lazy SupplierWorkerManager workerManager,
                                        RedissonClient redissonClient,
                                        NotificationDlqLogMapper dlqLogMapper) {
         this.meterRegistry = meterRegistry;

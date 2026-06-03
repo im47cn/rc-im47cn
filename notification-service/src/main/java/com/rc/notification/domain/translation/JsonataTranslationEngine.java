@@ -6,8 +6,6 @@ import com.dashjoin.jsonata.Timebox;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
 import java.util.Map;
 
 /**
@@ -21,7 +19,6 @@ import java.util.Map;
  * - jsonata-java 本身不提供文件系统、网络、反射访问原语，天然沙箱隔离
  * - 通过 Timebox 机制限制执行时间（5秒）和递归深度（1000层），防止恶意表达式 DoS
  */
-@Component
 public class JsonataTranslationEngine {
 
     private static final Logger log = LoggerFactory.getLogger(JsonataTranslationEngine.class);

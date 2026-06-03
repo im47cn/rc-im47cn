@@ -1,6 +1,7 @@
 package com.rc.notification.infrastructure.health;
 
 import com.rc.notification.application.worker.SupplierWorkerManager;
+import com.rc.notification.domain.config.SupplierConfigDomainService;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.stereotype.Component;
@@ -14,9 +15,12 @@ import org.springframework.stereotype.Component;
 public class WorkerHealthIndicator implements HealthIndicator {
 
     private final SupplierWorkerManager workerManager;
+    private final SupplierConfigDomainService configDomainService;
 
-    public WorkerHealthIndicator(SupplierWorkerManager workerManager) {
+    public WorkerHealthIndicator(SupplierWorkerManager workerManager,
+                                 SupplierConfigDomainService configDomainService) {
         this.workerManager = workerManager;
+        this.configDomainService = configDomainService;
     }
 
     @Override
@@ -31,12 +35,19 @@ public class WorkerHealthIndicator implements HealthIndicator {
                     .build();
         }
 
-        // 没有活跃 Worker 时仍返回 UP（可能没有启用的供应商配置）
-        // 只在 workerManager 运行中但线程异常全部退出时才返回 DOWN
+        // workerManager 运行中但无活跃 Worker，检查是否有启用的供应商
         if (workerManager.isRunning() && activeCount == 0) {
+            boolean hasEnabledSuppliers = !configDomainService.getAllActive().isEmpty();
+            if (hasEnabledSuppliers) {
+                return Health.down()
+                        .withDetail("reason", "No active workers despite enabled suppliers")
+                        .withDetail("activeWorkers", 0)
+                        .withDetail("maxWorkerThreads", maxThreads)
+                        .build();
+            }
             return Health.up()
                     .withDetail("activeWorkers", 0)
-                    .withDetail("note", "no active supplier configs or workers pending initialization")
+                    .withDetail("note", "no active supplier configs")
                     .withDetail("maxWorkerThreads", maxThreads)
                     .build();
         }

@@ -19,7 +19,7 @@ CREATE TABLE `supplier_config` (
     `success_case_sensitive` TINYINT DEFAULT 1 COMMENT '是否大小写敏感: 1-是, 0-否',
     `max_retry_count` INT NOT NULL DEFAULT 3 COMMENT '最大重试上限次数',
     `retry_backoff_initial_ms` INT NOT NULL DEFAULT 1000 COMMENT '退避重试初始延迟(毫秒),如1000ms',
-    `retry_backoff_multiplier` DECIMAL(3,2) NOT NULL DEFAULT 2.00 COMMENT '退避重试指数乘数/倍数,如2.00倍演进',
+    `retry_backoff_multiplier` DECIMAL(4,2) NOT NULL DEFAULT 2.00 COMMENT '退避重试指数乘数/倍数,如2.00倍演进',
     `retry_backoff_max_ms` INT NOT NULL DEFAULT 30000 COMMENT '退避重试最大延迟封顶上限(毫秒),防止无限制放大延迟',
     `worker_concurrency` INT NOT NULL DEFAULT 1 COMMENT '该供应商的消费线程并发数,高流量渠道可设>1,线程总数受max-worker-threads硬上限约束',
     `status` TINYINT DEFAULT 1 COMMENT '状态: 1-启用, 0-禁用',

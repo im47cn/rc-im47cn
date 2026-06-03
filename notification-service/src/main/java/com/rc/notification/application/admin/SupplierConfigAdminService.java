@@ -1,12 +1,9 @@
 package com.rc.notification.application.admin;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.rc.notification.domain.config.SupplierConfig;
+import com.rc.notification.domain.config.SupplierConfigRepository;
 import com.rc.notification.domain.credential.CredentialVault;
 import com.rc.notification.infrastructure.cache.ConfigEvictionListener;
-import com.rc.notification.infrastructure.persistence.entity.SupplierConfigEntity;
-import com.rc.notification.infrastructure.persistence.mapper.SupplierConfigMapper;
 import com.rc.notification.interfaces.admin.dto.PageResult;
 import com.rc.notification.interfaces.admin.dto.SupplierConfigCreateRequest;
 import com.rc.notification.interfaces.admin.dto.SupplierConfigDto;
@@ -30,14 +27,14 @@ public class SupplierConfigAdminService {
 
     private static final Logger log = LoggerFactory.getLogger(SupplierConfigAdminService.class);
 
-    private final SupplierConfigMapper supplierConfigMapper;
+    private final SupplierConfigRepository supplierConfigRepository;
     private final CredentialVault credentialVault;
     private final ConfigEvictionListener configEvictionListener;
 
-    public SupplierConfigAdminService(SupplierConfigMapper supplierConfigMapper,
+    public SupplierConfigAdminService(SupplierConfigRepository supplierConfigRepository,
                                        CredentialVault credentialVault,
                                        ConfigEvictionListener configEvictionListener) {
-        this.supplierConfigMapper = supplierConfigMapper;
+        this.supplierConfigRepository = supplierConfigRepository;
         this.credentialVault = credentialVault;
         this.configEvictionListener = configEvictionListener;
     }
@@ -46,38 +43,25 @@ public class SupplierConfigAdminService {
      * 分页查询供应商列表
      */
     public PageResult<SupplierConfigDto> listSuppliers(String keyword, Integer status, int page, int size) {
-        LambdaQueryWrapper<SupplierConfigEntity> wrapper = new LambdaQueryWrapper<>();
+        List<SupplierConfig> configs = supplierConfigRepository.findByFilters(keyword, status, page, size);
+        long total = supplierConfigRepository.countByFilters(keyword, status);
 
-        if (keyword != null && !keyword.isBlank()) {
-            wrapper.and(w -> w
-                    .like(SupplierConfigEntity::getSupplierCode, keyword)
-                    .or()
-                    .like(SupplierConfigEntity::getSupplierName, keyword));
-        }
-        if (status != null) {
-            wrapper.eq(SupplierConfigEntity::getStatus, status);
-        }
-        wrapper.orderByDesc(SupplierConfigEntity::getUpdateTime);
-
-        IPage<SupplierConfigEntity> pageResult = supplierConfigMapper.selectPage(
-                new Page<>(page, size), wrapper);
-
-        List<SupplierConfigDto> dtoList = pageResult.getRecords().stream()
+        List<SupplierConfigDto> dtoList = configs.stream()
                 .map(this::toDto)
                 .toList();
 
-        return new PageResult<>(dtoList, pageResult.getTotal(), page, size);
+        return new PageResult<>(dtoList, total, page, size);
     }
 
     /**
      * 查询单个供应商完整配置（凭证脱敏）
      */
     public SupplierConfigDto getSupplier(Long id) {
-        SupplierConfigEntity entity = supplierConfigMapper.selectById(id);
-        if (entity == null) {
+        SupplierConfig config = supplierConfigRepository.findById(id);
+        if (config == null) {
             throw new IllegalArgumentException("供应商配置不存在: id=" + id);
         }
-        return toDto(entity);
+        return toDto(config);
     }
 
     /**
@@ -85,105 +69,115 @@ public class SupplierConfigAdminService {
      */
     public SupplierConfigDto createSupplier(SupplierConfigCreateRequest request) {
         // 校验 supplier_code 唯一性
-        LambdaQueryWrapper<SupplierConfigEntity> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(SupplierConfigEntity::getSupplierCode, request.getSupplierCode());
-        if (supplierConfigMapper.selectCount(wrapper) > 0) {
+        if (supplierConfigRepository.existsBySupplierCode(request.getSupplierCode())) {
             throw new IllegalArgumentException("供应商编码已存在: " + request.getSupplierCode());
         }
 
-        SupplierConfigEntity entity = new SupplierConfigEntity();
-        copyFromCreateRequest(entity, request);
+        SupplierConfig config = new SupplierConfig();
+        copyFromCreateRequest(config, request);
 
         // 加密凭证
         if (request.getCredentials() != null && !request.getCredentials().isEmpty()) {
-            entity.setCredentialsEncrypted(credentialVault.encrypt(request.getCredentials()));
+            config.setCredentialsEncrypted(credentialVault.encrypt(request.getCredentials()));
         }
 
-        supplierConfigMapper.insert(entity);
+        supplierConfigRepository.save(config);
         log.info("新增供应商配置: supplierCode={}", request.getSupplierCode());
 
         // 广播 Pub/Sub CREATE 事件
         configEvictionListener.publishEviction(request.getSupplierCode(), "CREATE");
 
-        return toDto(entity);
+        return toDto(config);
     }
 
     /**
      * 修改供应商配置
      */
     public SupplierConfigDto updateSupplier(Long id, SupplierConfigUpdateRequest request) {
-        SupplierConfigEntity entity = supplierConfigMapper.selectById(id);
-        if (entity == null) {
+        SupplierConfig config = supplierConfigRepository.findById(id);
+        if (config == null) {
             throw new IllegalArgumentException("供应商配置不存在: id=" + id);
         }
 
-        copyFromUpdateRequest(entity, request);
+        // 保存更新前的配置快照用于变更检测
+        String snapshotBefore = configSnapshot(config);
+
+        copyFromUpdateRequest(config, request);
 
         // 凭证处理：null 表示保留原值，非 null 表示重新加密
+        boolean credentialChanged = false;
         if (request.getCredentials() != null) {
-            entity.setCredentialsEncrypted(credentialVault.encrypt(request.getCredentials()));
+            config.setCredentialsEncrypted(credentialVault.encrypt(request.getCredentials()));
+            credentialChanged = true;
         }
 
-        supplierConfigMapper.updateById(entity);
-        log.info("修改供应商配置: id={}, supplierCode={}", id, entity.getSupplierCode());
+        // 检测是否有实际变更
+        String snapshotAfter = configSnapshot(config);
+        if (!credentialChanged && snapshotBefore.equals(snapshotAfter)) {
+            log.info("供应商配置无变更，跳过更新: id={}, supplierCode={}", id, config.getSupplierCode());
+            return toDto(config);
+        }
+
+        supplierConfigRepository.update(config);
+        log.info("修改供应商配置: id={}, supplierCode={}", id, config.getSupplierCode());
 
         // 广播 Pub/Sub UPDATE 事件
-        configEvictionListener.publishEviction(entity.getSupplierCode(), "UPDATE");
+        configEvictionListener.publishEviction(config.getSupplierCode(), "UPDATE");
 
-        return toDto(entity);
+        return toDto(config);
     }
 
     /**
      * 启用/禁用供应商
      */
     public void toggleSupplierStatus(Long id, int status) {
-        SupplierConfigEntity entity = supplierConfigMapper.selectById(id);
-        if (entity == null) {
+        SupplierConfig config = supplierConfigRepository.findById(id);
+        if (config == null) {
             throw new IllegalArgumentException("供应商配置不存在: id=" + id);
         }
 
-        entity.setStatus(status);
-        supplierConfigMapper.updateById(entity);
-        log.info("切换供应商状态: id={}, supplierCode={}, status={}", id, entity.getSupplierCode(), status);
+        config.setStatus(status);
+        supplierConfigRepository.update(config);
+        log.info("切换供应商状态: id={}, supplierCode={}, status={}", id, config.getSupplierCode(), status);
 
         // 广播状态变更事件
         String action = status == 1 ? "ENABLE" : "DISABLE";
-        configEvictionListener.publishEviction(entity.getSupplierCode(), action);
+        configEvictionListener.publishEviction(config.getSupplierCode(), action);
     }
 
     /**
-     * Entity 转 DTO（凭证脱敏）
+     * SupplierConfig 转 DTO（凭证脱敏）
      */
-    private SupplierConfigDto toDto(SupplierConfigEntity entity) {
+    private SupplierConfigDto toDto(SupplierConfig config) {
         SupplierConfigDto dto = new SupplierConfigDto();
-        dto.setId(entity.getId());
-        dto.setSupplierCode(entity.getSupplierCode());
-        dto.setSupplierName(entity.getSupplierName());
-        dto.setDescription(entity.getDescription());
-        dto.setBaseUrl(entity.getBaseUrl());
-        dto.setHttpMethod(entity.getHttpMethod());
-        dto.setContentTypeBehavior(entity.getContentTypeBehavior());
-        dto.setPathTemplate(entity.getPathTemplate());
-        dto.setQueryTemplate(entity.getQueryTemplate());
-        dto.setHeaderTemplate(entity.getHeaderTemplate());
-        dto.setBodyTemplate(entity.getBodyTemplate());
-        dto.setConnectTimeoutMs(entity.getConnectTimeoutMs());
-        dto.setReadTimeoutMs(entity.getReadTimeoutMs());
-        dto.setSuccessHttpCodes(entity.getSuccessHttpCodes());
-        dto.setSuccessBodyPattern(entity.getSuccessBodyPattern());
-        dto.setSuccessBodyMatchMode(entity.getSuccessBodyMatchMode());
-        dto.setSuccessCaseSensitive(entity.getSuccessCaseSensitive());
-        dto.setMaxRetryCount(entity.getMaxRetryCount());
-        dto.setRetryBackoffInitialMs(entity.getRetryBackoffInitialMs());
-        dto.setRetryBackoffMultiplier(entity.getRetryBackoffMultiplier());
-        dto.setRetryBackoffMaxMs(entity.getRetryBackoffMaxMs());
-        dto.setWorkerConcurrency(entity.getWorkerConcurrency());
-        dto.setStatus(entity.getStatus());
-        dto.setCreateTime(entity.getCreateTime());
-        dto.setUpdateTime(entity.getUpdateTime());
+        dto.setId(config.getId());
+        dto.setSupplierCode(config.getSupplierCode());
+        dto.setSupplierName(config.getSupplierName());
+        dto.setDescription(config.getDescription());
+        dto.setBaseUrl(config.getBaseUrl());
+        dto.setHttpMethod(config.getHttpMethod());
+        dto.setContentTypeBehavior(config.getContentTypeBehavior());
+        dto.setPathTemplate(config.getPathTemplate());
+        dto.setQueryTemplate(config.getQueryTemplate());
+        dto.setHeaderTemplate(config.getHeaderTemplate());
+        dto.setBodyTemplate(config.getBodyTemplate());
+        dto.setConnectTimeoutMs(config.getConnectTimeoutMs());
+        dto.setReadTimeoutMs(config.getReadTimeoutMs());
+        dto.setSuccessHttpCodes(config.getSuccessHttpCodes());
+        dto.setSuccessBodyPattern(config.getSuccessBodyPattern());
+        dto.setSuccessBodyMatchMode(config.getSuccessBodyMatchMode());
+        dto.setSuccessCaseSensitive(config.getSuccessCaseSensitive());
+        dto.setMaxRetryCount(config.getMaxRetryCount());
+        dto.setRetryBackoffInitialMs(config.getRetryBackoffInitialMs());
+        dto.setRetryBackoffMultiplier(config.getRetryBackoffMultiplier());
+        dto.setRetryBackoffMaxMs(config.getRetryBackoffMaxMs());
+        dto.setWorkerConcurrency(config.getWorkerConcurrency());
+        dto.setStatus(config.getStatus());
+        dto.setCreateTime(config.getCreateTime());
+        dto.setUpdateTime(config.getUpdateTime());
 
         // 凭证脱敏：仅返回 key 列表
-        dto.setCredentialKeys(extractCredentialKeys(entity.getCredentialsEncrypted()));
+        dto.setCredentialKeys(extractCredentialKeys(config.getCredentialsEncrypted()));
 
         return dto;
     }
@@ -205,56 +199,77 @@ public class SupplierConfigAdminService {
     }
 
     /**
-     * 从创建请求复制字段到实体
+     * 从创建请求复制字段到领域模型
      */
-    private void copyFromCreateRequest(SupplierConfigEntity entity, SupplierConfigCreateRequest request) {
-        entity.setSupplierCode(request.getSupplierCode());
-        entity.setSupplierName(request.getSupplierName());
-        entity.setDescription(request.getDescription());
-        entity.setBaseUrl(request.getBaseUrl());
-        entity.setHttpMethod(request.getHttpMethod());
-        entity.setContentTypeBehavior(request.getContentTypeBehavior());
-        entity.setPathTemplate(request.getPathTemplate());
-        entity.setQueryTemplate(request.getQueryTemplate());
-        entity.setHeaderTemplate(request.getHeaderTemplate());
-        entity.setBodyTemplate(request.getBodyTemplate());
-        entity.setConnectTimeoutMs(request.getConnectTimeoutMs());
-        entity.setReadTimeoutMs(request.getReadTimeoutMs());
-        entity.setSuccessHttpCodes(request.getSuccessHttpCodes());
-        entity.setSuccessBodyPattern(request.getSuccessBodyPattern());
-        entity.setSuccessBodyMatchMode(request.getSuccessBodyMatchMode());
-        entity.setSuccessCaseSensitive(request.getSuccessCaseSensitive());
-        entity.setMaxRetryCount(request.getMaxRetryCount());
-        entity.setRetryBackoffInitialMs(request.getRetryBackoffInitialMs());
-        entity.setRetryBackoffMultiplier(request.getRetryBackoffMultiplier());
-        entity.setRetryBackoffMaxMs(request.getRetryBackoffMaxMs());
-        entity.setWorkerConcurrency(request.getWorkerConcurrency());
-        entity.setStatus(request.getStatus());
+    private void copyFromCreateRequest(SupplierConfig config, SupplierConfigCreateRequest request) {
+        config.setSupplierCode(request.getSupplierCode());
+        config.setSupplierName(request.getSupplierName());
+        config.setDescription(request.getDescription());
+        config.setBaseUrl(request.getBaseUrl());
+        config.setHttpMethod(request.getHttpMethod());
+        config.setContentTypeBehavior(request.getContentTypeBehavior());
+        config.setPathTemplate(request.getPathTemplate());
+        config.setQueryTemplate(request.getQueryTemplate());
+        config.setHeaderTemplate(request.getHeaderTemplate());
+        config.setBodyTemplate(request.getBodyTemplate());
+        config.setConnectTimeoutMs(request.getConnectTimeoutMs());
+        config.setReadTimeoutMs(request.getReadTimeoutMs());
+        config.setSuccessHttpCodes(request.getSuccessHttpCodes());
+        config.setSuccessBodyPattern(request.getSuccessBodyPattern());
+        config.setSuccessBodyMatchMode(request.getSuccessBodyMatchMode());
+        config.setSuccessCaseSensitive(request.getSuccessCaseSensitive());
+        config.setMaxRetryCount(request.getMaxRetryCount());
+        config.setRetryBackoffInitialMs(request.getRetryBackoffInitialMs());
+        config.setRetryBackoffMultiplier(request.getRetryBackoffMultiplier());
+        config.setRetryBackoffMaxMs(request.getRetryBackoffMaxMs());
+        config.setWorkerConcurrency(request.getWorkerConcurrency());
+        config.setStatus(request.getStatus());
     }
 
     /**
-     * 从更新请求复制字段到实体
+     * 从更新请求复制字段到领域模型
      */
-    private void copyFromUpdateRequest(SupplierConfigEntity entity, SupplierConfigUpdateRequest request) {
-        entity.setSupplierName(request.getSupplierName());
-        entity.setDescription(request.getDescription());
-        entity.setBaseUrl(request.getBaseUrl());
-        if (request.getHttpMethod() != null) entity.setHttpMethod(request.getHttpMethod());
-        if (request.getContentTypeBehavior() != null) entity.setContentTypeBehavior(request.getContentTypeBehavior());
-        entity.setPathTemplate(request.getPathTemplate());
-        entity.setQueryTemplate(request.getQueryTemplate());
-        entity.setHeaderTemplate(request.getHeaderTemplate());
-        entity.setBodyTemplate(request.getBodyTemplate());
-        if (request.getConnectTimeoutMs() != null) entity.setConnectTimeoutMs(request.getConnectTimeoutMs());
-        if (request.getReadTimeoutMs() != null) entity.setReadTimeoutMs(request.getReadTimeoutMs());
-        if (request.getSuccessHttpCodes() != null) entity.setSuccessHttpCodes(request.getSuccessHttpCodes());
-        entity.setSuccessBodyPattern(request.getSuccessBodyPattern());
-        if (request.getSuccessBodyMatchMode() != null) entity.setSuccessBodyMatchMode(request.getSuccessBodyMatchMode());
-        if (request.getSuccessCaseSensitive() != null) entity.setSuccessCaseSensitive(request.getSuccessCaseSensitive());
-        if (request.getMaxRetryCount() != null) entity.setMaxRetryCount(request.getMaxRetryCount());
-        if (request.getRetryBackoffInitialMs() != null) entity.setRetryBackoffInitialMs(request.getRetryBackoffInitialMs());
-        if (request.getRetryBackoffMultiplier() != null) entity.setRetryBackoffMultiplier(request.getRetryBackoffMultiplier());
-        if (request.getRetryBackoffMaxMs() != null) entity.setRetryBackoffMaxMs(request.getRetryBackoffMaxMs());
-        if (request.getWorkerConcurrency() != null) entity.setWorkerConcurrency(request.getWorkerConcurrency());
+    private void copyFromUpdateRequest(SupplierConfig config, SupplierConfigUpdateRequest request) {
+        config.setSupplierName(request.getSupplierName());
+        config.setDescription(request.getDescription());
+        config.setBaseUrl(request.getBaseUrl());
+        if (request.getHttpMethod() != null) config.setHttpMethod(request.getHttpMethod());
+        if (request.getContentTypeBehavior() != null) config.setContentTypeBehavior(request.getContentTypeBehavior());
+        config.setPathTemplate(request.getPathTemplate());
+        config.setQueryTemplate(request.getQueryTemplate());
+        config.setHeaderTemplate(request.getHeaderTemplate());
+        config.setBodyTemplate(request.getBodyTemplate());
+        if (request.getConnectTimeoutMs() != null) config.setConnectTimeoutMs(request.getConnectTimeoutMs());
+        if (request.getReadTimeoutMs() != null) config.setReadTimeoutMs(request.getReadTimeoutMs());
+        if (request.getSuccessHttpCodes() != null) config.setSuccessHttpCodes(request.getSuccessHttpCodes());
+        config.setSuccessBodyPattern(request.getSuccessBodyPattern());
+        if (request.getSuccessBodyMatchMode() != null) config.setSuccessBodyMatchMode(request.getSuccessBodyMatchMode());
+        if (request.getSuccessCaseSensitive() != null) config.setSuccessCaseSensitive(request.getSuccessCaseSensitive());
+        if (request.getMaxRetryCount() != null) config.setMaxRetryCount(request.getMaxRetryCount());
+        if (request.getRetryBackoffInitialMs() != null) config.setRetryBackoffInitialMs(request.getRetryBackoffInitialMs());
+        if (request.getRetryBackoffMultiplier() != null) config.setRetryBackoffMultiplier(request.getRetryBackoffMultiplier());
+        if (request.getRetryBackoffMaxMs() != null) config.setRetryBackoffMaxMs(request.getRetryBackoffMaxMs());
+        if (request.getWorkerConcurrency() != null) config.setWorkerConcurrency(request.getWorkerConcurrency());
+    }
+
+    /**
+     * 生成配置快照字符串，用于变更检测（排除 id、createTime、updateTime）
+     */
+    private String configSnapshot(SupplierConfig c) {
+        return String.join("|",
+                str(c.getSupplierName()), str(c.getDescription()), str(c.getBaseUrl()),
+                str(c.getHttpMethod()), str(c.getContentTypeBehavior()),
+                str(c.getPathTemplate()), str(c.getQueryTemplate()),
+                str(c.getHeaderTemplate()), str(c.getBodyTemplate()),
+                str(c.getConnectTimeoutMs()), str(c.getReadTimeoutMs()),
+                str(c.getSuccessHttpCodes()), str(c.getSuccessBodyPattern()),
+                str(c.getSuccessBodyMatchMode()), str(c.getSuccessCaseSensitive()),
+                str(c.getMaxRetryCount()), str(c.getRetryBackoffInitialMs()),
+                str(c.getRetryBackoffMultiplier()), str(c.getRetryBackoffMaxMs()),
+                str(c.getWorkerConcurrency()), str(c.getStatus()));
+    }
+
+    private static String str(Object o) {
+        return o == null ? "" : o.toString();
     }
 }
