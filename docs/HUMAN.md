@@ -137,6 +137,15 @@ Spring 官方提供了一个针对只读/读写数据绑定的 SimpleEvaluationC
 3. Go 语言：AI 推荐 Go，我选择 Java。理由：团队熟练度优先，Java 生态更成熟
 4. 前后端耦合部署：初始实现中 AI 将前端构建到 Spring Boot static 资源。我在 review 阶段要求独立部署，实现了 Nginx/Docker 方案。
 
+#### 哪些关键决策是我自己做出的，以及原因
+
+1. JSONata 替代 SpEL：AI 推荐 SpEL，但 SimpleEvaluationContext 过于严苛（禁止成员方法调用），StandardEvaluationContext 有 RCE 风险。我选择 JSONata：天然沙箱、零 JVM 逃逸、表达力足够
+2. 中台承担格式拼装：AI 强烈推荐业务端自行拼装报文（"盲目转发代理"），我拒绝。通知中台本身就是防腐层，把异构性留给业务端违背 ACL 本意
+3. Java 而非 Go：基于团队技术栈熟练度和 Java 生态成熟度，优先保障交付效率
+4. per-supplier 队列物理隔离：AI 初始方案是全局共享队列。我认为慢速供应商的 IO 阻塞会导致全局雪崩，因此要求按供应商隔离队列和消费线程
+5. 前后端独立部署：AI 初始方案将前端构建产物放入 Spring Boot static 资源。我在 review 阶段要求分离，采用 Nginx + Docker 独立部署，符合真实生产环境实践
+6. Redis 不可用时返回 503 而非静默丢弃：对于核心权益链路，宁可阻断上游也不能丢消息，由上游自身重试机制兜底
+
 ### 测试验收
 
 #### 测试覆盖
@@ -152,6 +161,10 @@ Spring 官方提供了一个针对只读/读写数据绑定的 SimpleEvaluationC
 
 #### MVP 限制说明
 
-  - 未编写独立的单元测试（集成测试已覆盖核心路径）
   - 未进行压测（需要真实 Redis + MySQL 环境）
   - 管理后台 SSO 使用硬编码账号（环境变量覆盖）
+
+#### 发现的问题
+
+1. 每次修改供应商信息时，机械的杀死并重新拉起 DeliveryWorker。优化为首次全量拉起 Worker，扩容时补齐差额 Worker，缩容时优雅退出差额 Worker；改 URL/模板/重试时，不重启 Worker，缓存刷新自动生效；禁用供应商时全部停止 Worker。
+2. 

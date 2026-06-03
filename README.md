@@ -101,7 +101,7 @@ docker run -d --name mysql -p 3306:3306 \
 # 后端
 cd notification-service
 mvn clean package -DskipTests
-java -jar target/notification-service-*.jar
+java -jar target/notification-service-*.jar -Dspring-boot.run.profiles=dev
 
 # 前端
 cd notification-admin-ui
