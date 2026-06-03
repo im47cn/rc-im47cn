@@ -91,6 +91,13 @@
 ## 8. 快速开始
 
 ```bash
+# 基础设施
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+docker run -d --name mysql -p 3306:3306 \
+    -e MYSQL_ROOT_PASSWORD=root \
+    -e MYSQL_DATABASE=notification \
+    mysql:8.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
 # 后端
 cd notification-service
 mvn clean package -DskipTests
