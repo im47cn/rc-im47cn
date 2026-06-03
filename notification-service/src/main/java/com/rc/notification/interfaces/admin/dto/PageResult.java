@@ -1,15 +1,22 @@
 package com.rc.notification.interfaces.admin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.List;
 
 /**
  * 通用分页响应封装
  */
+@Schema(description = "通用分页响应")
 public class PageResult<T> {
 
+    @Schema(description = "数据列表")
     private List<T> records;
+    @Schema(description = "总记录数", example = "100")
     private long total;
+    @Schema(description = "当前页码", example = "1")
     private int page;
+    @Schema(description = "每页数量", example = "20")
     private int size;
 
     public PageResult() {

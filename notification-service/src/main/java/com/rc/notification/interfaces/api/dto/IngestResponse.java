@@ -1,12 +1,18 @@
 package com.rc.notification.interfaces.api.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
  * 事件摄取响应 DTO
  */
+@Schema(description = "事件摄取响应")
 public class IngestResponse {
 
+    @Schema(description = "事件ID")
     private String eventId;
+    @Schema(description = "处理状态: ACCEPTED/IDEMPOTENT_HIT/DEAD_LETTERED/REJECTED", example = "ACCEPTED")
     private String status;
+    @Schema(description = "响应消息")
     private String message;
 
     public IngestResponse() {

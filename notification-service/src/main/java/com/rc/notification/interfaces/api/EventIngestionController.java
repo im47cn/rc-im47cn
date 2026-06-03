@@ -3,6 +3,10 @@ package com.rc.notification.interfaces.api;
 import com.rc.notification.application.service.IngestionService;
 import com.rc.notification.interfaces.api.dto.IngestResponse;
 import com.rc.notification.interfaces.api.dto.NotificationEventDto;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>
  * 毫秒级完成参数校验、分布式锁拦截、压入 Redisson 队列并回应上游
  */
+@Tag(name = "事件摄取", description = "高并发事件接收端点")
 @RestController
 public class EventIngestionController {
 
@@ -29,6 +34,14 @@ public class EventIngestionController {
         this.ingestionService = ingestionService;
     }
 
+    @Operation(summary = "接收通知事件", description = "校验参数、幂等拦截、压入 Redisson 队列并回应上游")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "事件已接收"),
+            @ApiResponse(responseCode = "202", description = "幂等命中，事件已存在"),
+            @ApiResponse(responseCode = "400", description = "请求参数校验失败"),
+            @ApiResponse(responseCode = "409", description = "事件已进入死信队列"),
+            @ApiResponse(responseCode = "503", description = "Redis 不可用，请稍后重试")
+    })
     @PostMapping("/api/v1/notifications/ingest")
     public ResponseEntity<IngestResponse> ingestEvent(@Valid @RequestBody NotificationEventDto eventDto) {
         try {

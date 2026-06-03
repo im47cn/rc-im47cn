@@ -1,11 +1,16 @@
 package com.rc.notification.interfaces.admin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
  * 管理后台登录响应
  */
+@Schema(description = "管理后台登录响应")
 public class LoginResponse {
 
+    @Schema(description = "是否成功")
     private boolean success;
+    @Schema(description = "响应消息")
     private String message;
 
     public LoginResponse() {

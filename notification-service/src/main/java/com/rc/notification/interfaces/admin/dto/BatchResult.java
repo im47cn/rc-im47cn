@@ -1,11 +1,16 @@
 package com.rc.notification.interfaces.admin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
  * 批量操作结果
  */
+@Schema(description = "批量操作结果")
 public class BatchResult {
 
+    @Schema(description = "成功数量")
     private int successCount;
+    @Schema(description = "失败数量")
     private int failureCount;
 
     public BatchResult() {

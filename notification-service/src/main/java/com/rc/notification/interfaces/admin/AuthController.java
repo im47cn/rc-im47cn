@@ -2,6 +2,9 @@ package com.rc.notification.interfaces.admin;
 
 import com.rc.notification.interfaces.admin.dto.LoginRequest;
 import com.rc.notification.interfaces.admin.dto.LoginResponse;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
@@ -20,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
  * MVP 阶段支持硬编码账号，可通过 Spring 外部化配置覆盖。
  * 后续可替换为企业 SSO/LDAP。
  */
+@Tag(name = "鉴权管理", description = "管理后台鉴权控制器")
 @RestController
 @RequestMapping("/api/v1/admin")
 public class AuthController {
@@ -40,6 +44,8 @@ public class AuthController {
      * <p>
      * 校验用户名密码，成功后写入 HttpSession。
      */
+    @Operation(summary = "管理员登录", description = "校验用户名密码，成功后写入 HttpSession")
+    @ApiResponse(responseCode = "200", description = "登录结果")
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request,
                                                 HttpServletRequest httpServletRequest) {
@@ -65,6 +71,8 @@ public class AuthController {
      * <p>
      * 清除 Session。
      */
+    @Operation(summary = "管理员登出", description = "清除 Session")
+    @ApiResponse(responseCode = "200", description = "登出成功")
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(HttpSession session) {
         session.invalidate();

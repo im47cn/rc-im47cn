@@ -1,18 +1,28 @@
 package com.rc.notification.interfaces.admin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.Map;
 
 /**
  * 完整请求预览结果
  */
+@Schema(description = "完整请求预览结果")
 public class FullPreviewResultDto {
 
+    @Schema(description = "是否成功")
     private boolean success;
+    @Schema(description = "解析后的完整URL")
     private String resolvedUrl;
+    @Schema(description = "HTTP 方法")
     private String httpMethod;
+    @Schema(description = "请求头")
     private Map<String, String> headers;
+    @Schema(description = "请求体")
     private String body;
+    @Schema(description = "错误信息")
     private String error;
+    @Schema(description = "错误偏移量，-1 表示无错误")
     private int errorOffset = -1;
 
     public boolean isSuccess() { return success; }

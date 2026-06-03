@@ -45,6 +45,12 @@ public class AdminAuthFilter implements Filter {
             path = path.substring(0, path.length() - 1);
         }
 
+        // 放行 Swagger UI 和 OpenAPI 文档路径
+        if (path.startsWith("/swagger-ui") || path.startsWith("/v3/api-docs")) {
+            chain.doFilter(request, response);
+            return;
+        }
+
         // 仅拦截 /api/v1/admin/** 路径
         if (!path.startsWith(ADMIN_PATH_PREFIX)) {
             chain.doFilter(request, response);

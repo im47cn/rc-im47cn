@@ -1,13 +1,20 @@
 package com.rc.notification.interfaces.admin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 /**
  * 单表达式仿真结果
  */
+@Schema(description = "单表达式仿真结果")
 public class SimulationResultDto {
 
+    @Schema(description = "是否成功")
     private boolean success;
+    @Schema(description = "转换结果")
     private String transformedResult;
+    @Schema(description = "错误信息")
     private String error;
+    @Schema(description = "错误偏移量，-1 表示无错误")
     private int errorOffset = -1;
 
     public static SimulationResultDto ok(String result) {
