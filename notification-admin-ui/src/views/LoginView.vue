@@ -29,7 +29,11 @@ async function handleLogin() {
 
   loading.value = true
   try {
-    await login(loginForm.username, loginForm.password)
+    const res = await login(loginForm.username, loginForm.password)
+    if (!res.data.success) {
+      ElMessage.error(res.data.message || '登录失败，请检查用户名和密码')
+      return
+    }
     authStore.setAuthenticated(loginForm.username)
     const redirect = (route.query.redirect as string) || '/suppliers'
     router.push(redirect)
