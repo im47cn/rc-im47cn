@@ -36,7 +36,7 @@ const form = reactive({
   contentTypeBehavior: 'APPLICATION_JSON',
   connectTimeoutMs: 3000,
   readTimeoutMs: 5000,
-  maxRetryCount: 3,
+  maxRetryCount: 10,
   retryBackoffInitialMs: 1000,
   retryBackoffMultiplier: 2.00,
   retryBackoffMaxMs: 30000,
@@ -44,7 +44,7 @@ const form = reactive({
   successBodyPattern: '',
   successBodyMatchMode: 'EQUALS',
   successCaseSensitive: true,
-  workerConcurrency: 1,
+  workerConcurrency: 10,
   pathTemplate: '',
   queryTemplate: '',
   headerTemplate: '',
@@ -56,6 +56,36 @@ const rules: FormRules = {
   supplierName: [{ required: true, message: '请输入供应商名称', trigger: 'blur' }],
   baseUrl: [{ required: true, message: '请输入基础URL', trigger: 'blur' }],
   bodyTemplate: [{ required: true, message: '请输入Body模板', trigger: 'blur' }]
+}
+
+// Body 模板提示文本（根据 Content-Type 联动）
+const bodyTemplatePlaceholder = computed(() => {
+  if (form.contentTypeBehavior === 'APPLICATION_FORM_URLENCODED') {
+    return 'Form 格式示例: "key1=" & value1 & "&key2=" & value2'
+  }
+  return 'JSON 格式示例: { "mobile": mobile, "content": content }'
+})
+
+// 重试时间线预览
+const retryTimeline = computed(() => {
+  const rows: { attempt: number; interval: number; cumulative: number }[] = []
+  let cumulative = 0
+  for (let i = 1; i <= form.maxRetryCount; i++) {
+    const interval = Math.min(
+      form.retryBackoffInitialMs * Math.pow(form.retryBackoffMultiplier, i - 1),
+      form.retryBackoffMaxMs
+    )
+    cumulative += interval
+    rows.push({ attempt: i, interval: Math.round(interval), cumulative: Math.round(cumulative) })
+  }
+  return rows
+})
+
+// 格式化毫秒为可读时间
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${(ms / 60000).toFixed(1)}min`
 }
 
 // 供应商配置（传给 SimulationPanel 的完整预览）
@@ -92,7 +122,8 @@ onMounted(async () => {
     form.successHttpCodes = data.successHttpCodes || data.success_http_codes || '200'
     form.successBodyPattern = data.successBodyPattern || data.success_body_pattern || ''
     form.successBodyMatchMode = data.successBodyMatchMode || data.success_body_match_mode || 'EQUALS'
-    form.successCaseSensitive = data.successCaseSensitive ?? data.success_case_sensitive ?? true
+    const caseSensitiveRaw = data.successCaseSensitive ?? data.success_case_sensitive ?? 1
+    form.successCaseSensitive = caseSensitiveRaw === true || caseSensitiveRaw === 1
     form.workerConcurrency = data.workerConcurrency ?? data.worker_concurrency ?? 1
     form.pathTemplate = data.pathTemplate || data.path_template || ''
     form.queryTemplate = data.queryTemplate || data.query_template || ''
@@ -115,7 +146,16 @@ async function handleSubmit() {
 
   submitLoading.value = true
   try {
-    const submitData: Record<string, unknown> = { ...form }
+    const submitData: Record<string, unknown> = {
+      ...form,
+      successCaseSensitive: form.successCaseSensitive ? 1 : 0,
+      // 空字符串模板转为 null，避免 @NotBlank 校验拒绝
+      pathTemplate: form.pathTemplate || null,
+      queryTemplate: form.queryTemplate || null,
+      headerTemplate: form.headerTemplate || null,
+      bodyTemplate: form.bodyTemplate || null,
+      successBodyPattern: form.successBodyPattern || null
+    }
 
     // 处理凭证数据
     const credentialData = credentialRef.value?.getSubmitData()
@@ -237,10 +277,25 @@ function handleCancel() {
           </el-col>
           <el-col :span="6">
             <el-form-item label="最大延迟(ms)">
-              <el-input-number v-model="form.retryBackoffMaxMs" :min="1000" :max="300000" />
+              <el-input-number v-model="form.retryBackoffMaxMs" :min="1000" :max="3600000" />
             </el-form-item>
           </el-col>
         </el-row>
+
+        <!-- 重试时间线预览 -->
+        <el-form-item v-if="form.maxRetryCount > 0" label="">
+          <el-table :data="retryTimeline" size="small" border style="width: 100%" max-height="300">
+            <el-table-column prop="attempt" label="重试次数" width="100" align="center">
+              <template #default="{ row }">第 {{ row.attempt }} 次</template>
+            </el-table-column>
+            <el-table-column prop="interval" label="等待间隔" width="150" align="center">
+              <template #default="{ row }">{{ formatMs(row.interval) }}</template>
+            </el-table-column>
+            <el-table-column prop="cumulative" label="累计延迟" width="150" align="center">
+              <template #default="{ row }">{{ formatMs(row.cumulative) }}</template>
+            </el-table-column>
+          </el-table>
+        </el-form-item>
 
         <!-- 成功判定规则 -->
         <el-divider content-position="left">成功判定规则</el-divider>
@@ -251,16 +306,16 @@ function handleCancel() {
               <el-input v-model="form.successHttpCodes" placeholder="200,201 (逗号分隔)" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="6">
             <el-form-item label="响应体匹配表达式">
               <el-input v-model="form.successBodyPattern" placeholder="可选" />
             </el-form-item>
           </el-col>
-          <el-col :span="4">
+          <el-col :span="6">
             <el-form-item label="匹配模式">
               <el-select v-model="form.successBodyMatchMode" style="width: 100%">
-                <el-option label="EQUALS" value="EQUALS" />
-                <el-option label="CONTAINS" value="CONTAINS" />
+                <el-option label="精确匹配 (EQUALS)" value="EQUALS" />
+                <el-option label="包含匹配 (CONTAINS)" value="CONTAINS" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -305,6 +360,13 @@ function handleCancel() {
             />
           </el-tab-pane>
           <el-tab-pane label="Body 模板" name="body">
+            <el-alert
+              :title="bodyTemplatePlaceholder"
+              :type="form.contentTypeBehavior === 'APPLICATION_FORM_URLENCODED' ? 'warning' : 'info'"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px"
+            />
             <SimulationPanel
               v-model:expression="form.bodyTemplate"
               :supplier-config="supplierConfig"

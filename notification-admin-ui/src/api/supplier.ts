@@ -22,5 +22,5 @@ export function updateSupplier(id: number, data: Record<string, unknown>) {
 
 /** 切换供应商启用/禁用状态 */
 export function toggleSupplierStatus(id: number, status: number) {
-  return request.patch(`/api/v1/admin/suppliers/${id}/status`, { status })
+  return request.patch(`/api/v1/admin/suppliers/${id}/status`, null, { params: { status } })
 }

@@ -1,10 +1,32 @@
 <script setup lang="ts">
-// 占位：T21 实现
+import AppLayout from '../components/AppLayout.vue'
+import SimulationPanel from '../components/SimulationPanel.vue'
 </script>
 
 <template>
-  <div>
-    <h1>JSONata 仿真</h1>
-    <p>仿真页面将在 T21 实现</p>
-  </div>
+  <AppLayout>
+    <div class="simulation-page">
+      <div class="page-header">
+        <h2>JSONata 在线仿真 Playground</h2>
+      </div>
+      <el-card>
+        <SimulationPanel />
+      </el-card>
+    </div>
+  </AppLayout>
 </template>
+
+<style scoped>
+.simulation-page {
+  max-width: 1200px;
+}
+
+.page-header {
+  margin-bottom: 20px;
+}
+
+.page-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+</style>
