@@ -12,21 +12,30 @@
 - 投递可靠性（At-Least-Once + 指数退避重试 + DLQ 兜底）
 - 供应商级别资源隔离（独立队列 + 独立 Worker 线程）
 - 零代码接入新供应商（JSONata 声明式模板 + 在线仿真）
+- 发布-订阅模型（Publisher → EventType → Subscription 三层事件注册与分发）
+- Schema 治理（字段指纹采样 + 漂移检测 + 影响分析）
 
 ### 明确不解决的问题（及理由）
 - 下游幂等性：At-Least-Once 语义下可能重复投递，幂等由下游自行保证
 - 供应商级精细限流：MVP 仅做全局线程上限控制，不做 per-supplier rate limiting
 - 消息顺序保证：业务场景不要求严格有序，追求吞吐优先
 - 响应结果回传：业务系统不关心外部 API 返回值，通知为 fire-and-forget 语义
+- 字符编码兼容：MVP 版本假设所有接入方和供应商均使用 UTF-8 编码，不处理 GBK/ISO-8859-1 等编码转换
 
 ## 3. 整体架构与核心设计
 
 ### 架构图
 
 ```text
+V1（直接投递）：
 上游业务 → [Ingest API] → [Redis 队列(per-supplier)] → [Worker 线程池] → [JSONata 转换] → [OkHttp 投递] → 下游供应商
                               ↓ 失败重试（指数退避）
                          [DLQ MySQL] ← 超过最大重试次数
+
+V2（发布-订阅）：
+发布方 → [X-Publisher-Key 认证] → [Ingest V2 API] → 查询活跃订阅 → 扇出入队(per-subscriber)
+              ↓ 异步                                    ↓
+       [字段采样 + 漂移检测]                    [EffectiveConfig 合并] → Worker → 投递
 ```
 
 ### 核心组件
@@ -34,6 +43,9 @@
 - **JSONata 沙箱引擎**：替代 SpEL，彻底消除 RCE 风险
 - **CredentialVault**：AES-256-GCM 加密存储供应商凭证
 - **SupplierWorkerManager**：动态创建/销毁 per-supplier Worker，SmartLifecycle 优雅停机
+- **Publisher-Subscriber 模型**：发布方注册 + 事件类型定义 + 订阅关系管理，支持配置覆盖
+- **EffectiveConfigResolver**：Subscription 覆盖字段 > SupplierConfig 基础字段，coalesce 语义合并
+- **Schema Drift Detection**：运行时字段指纹采样（前 100 条 100%，之后 1%）+ Schema Diff 影响分析
 
 ## 4. 可靠性与失败处理
 
@@ -101,7 +113,7 @@ docker run -d --name mysql -p 3306:3306 \
 # 后端
 cd notification-service
 mvn clean package -DskipTests
-java -jar target/notification-service-*.jar -Dspring-boot.run.profiles=dev
+java -jar target/notification-service-*.jar --spring.profiles.active=dev
 
 # 前端
 cd notification-admin-ui
@@ -114,20 +126,53 @@ docker build -t notification-admin-ui . && docker run -d -p 80:80 notification-a
 ## 9. 项目结构
 
 ```
-notification-service/                    # 后端服务 (Spring Boot)
+notification-service/                        # 后端服务 (Spring Boot 3.2)
 ├── src/main/java/com/rc/notification/
-│   ├── interfaces/                      # 用户接口层 (API + Admin)
-│   ├── application/                     # 应用层 (编排、Worker、DLQ)
-│   ├── domain/                          # 领域层 (配置、转换引擎、凭证保险柜)
-│   └── infrastructure/                  # 基础设施层 (持久化、缓存、HTTP、审计)
-├── src/test/java/                       # 29 个集成测试
+│   ├── interfaces/                          # 接口层
+│   │   ├── api/                             #   对外 API
+│   │   │   └── dto/                         #     IngestV2Request/Response, DispatchDetail
+│   │   └── admin/                           #   管理后台 API
+│   │       └── dto/                         #     请求/响应 DTO
+│   ├── application/                         # 应用层
+│   │   ├── service/IngestionService         #   入队编排 (V1 + V2)
+│   │   ├── worker/                          #   Worker 管理与投递执行
+│   │   ├── admin/                           #   Publisher/EventType/Subscription 管理服务
+│   │   ├── detection/                       #   FieldSamplingService + ChangeDetectionService
+│   │   ├── dlq/                             #   死信队列服务
+│   │   └── event/                           #   领域事件 (SupplierConfigActivated/Deactivated)
+│   ├── domain/                              # 领域层
+│   │   ├── config/                          #   SupplierConfig 实体与仓储
+│   │   ├── publisher/                       #   Publisher 发布方注册
+│   │   ├── event/                           #   EventType 事件类型 (DRAFT→ACTIVE→DEPRECATED)
+│   │   ├── subscription/                    #   Subscription + EffectiveConfigResolver
+│   │   ├── detection/                       #   FieldFingerprint 字段指纹 + ChangeRecord 变更记录
+│   │   ├── translation/                     #   JSONata 沙箱转换引擎
+│   │   └── credential/                      #   CredentialVault (AES-256-GCM)
+│   └── infrastructure/                      # 基础设施层
+│       ├── persistence/                     #   MyBatis-Plus Entity/Mapper/RepositoryImpl
+│       ├── cache/                           #   Caffeine 缓存 + Redis Pub/Sub 驱逐
+│       ├── http/                            #   OkHttp 动态客户端
+│       ├── audit/                           #   Logback 异步审计
+│       ├── health/                          #   Redis + Worker 健康检查
+│       └── metrics/                         #   Micrometer 业务指标
+├── src/main/resources/
+│   ├── db/migration/                        #   Flyway 迁移
+│   ├── application.yml
+│   └── logback-spring.xml
+├── src/test/java/                           # 测试类 (单元 + 集成)
 └── pom.xml
 
-notification-admin-ui/                   # 管理后台前端 (Vue 3 SPA)
+notification-admin-ui/                       # 管理后台前端 (Vue 3 + Element Plus + Vite)
 ├── src/
-│   ├── views/                           # 页面 (Login, SupplierList/Form, Simulation, DlqList)
-│   ├── components/                      # 组件 (MonacoEditor, SimulationPanel, CredentialForm)
-│   └── api/                             # Axios 接口封装
+│   ├── views                               # 9 个页面
+│   │   └── LoginView                       #   登录
+│   ├── components/                          # 通用组件 (MonacoEditor, SimulationPanel, CredentialForm)
+│   ├── api/                                 # 9 个 Axios 接口模块
+│   ├── router/                              # Vue Router
+│   ├── stores/                              # Pinia 状态管理
+│   └── utils/                               # Axios 实例与工具函数
+├── nginx.conf                               # Nginx 反代配置
+├── Dockerfile
 └── package.json
 ```
 
