@@ -1,0 +1,10 @@
+CREATE TABLE `publisher` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    `publisher_code` VARCHAR(64) NOT NULL UNIQUE COMMENT '发布方唯一标识,如 order-service',
+    `publisher_name` VARCHAR(128) NOT NULL COMMENT '发布方名称',
+    `api_key` VARCHAR(256) NOT NULL UNIQUE COMMENT 'Ingest API 鉴权密钥',
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '状态: 1-启用, 0-禁用',
+    `contact_info` VARCHAR(256) DEFAULT NULL COMMENT '联系方式',
+    `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='事件发布方注册表';
