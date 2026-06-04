@@ -64,6 +64,16 @@ public class SupplierConfigController {
     }
 
     /**
+     * 按供应商编码查询配置
+     */
+    @Operation(summary = "按编码查询供应商配置")
+    @ApiResponse(responseCode = "200", description = "查询成功")
+    @GetMapping("/by-code/{code}")
+    public SupplierConfigDto getSupplierByCode(@Parameter(description = "供应商编码") @PathVariable String code) {
+        return adminService.getSupplierByCode(code);
+    }
+
+    /**
      * 新增供应商
      */
     @Operation(summary = "新增供应商")

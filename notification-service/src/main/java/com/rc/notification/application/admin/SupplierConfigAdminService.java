@@ -65,6 +65,17 @@ public class SupplierConfigAdminService {
     }
 
     /**
+     * 按供应商编码查询配置（凭证脱敏）
+     */
+    public SupplierConfigDto getSupplierByCode(String supplierCode) {
+        SupplierConfig config = supplierConfigRepository.findBySupplierCode(supplierCode);
+        if (config == null) {
+            throw new IllegalArgumentException("供应商配置不存在: supplierCode=" + supplierCode);
+        }
+        return toDto(config);
+    }
+
+    /**
      * 新增供应商
      */
     public SupplierConfigDto createSupplier(SupplierConfigCreateRequest request) {
