@@ -2,6 +2,7 @@ package com.rc.notification.application.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
+import com.rc.notification.domain.subscription.SubscriptionRepository;
 import com.rc.notification.infrastructure.http.FullStackHttpRequestBuilder;
 import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
 import org.redisson.api.RedissonClient;
@@ -28,6 +29,9 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
     /** 可选依赖：死信处理（T11 实现后注入） */
     private DeliveryWorker.DeadLetterHandler deadLetterHandler;
 
+    /** 可选依赖：订阅关系（v2 配置合并） */
+    private SubscriptionRepository subscriptionRepository;
+
     public DeliveryWorkerFactoryImpl(RedissonClient redissonClient,
                                      SupplierConfigDomainService configDomainService,
                                      FullStackHttpRequestBuilder requestBuilder,
@@ -52,6 +56,11 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
         this.deadLetterHandler = deadLetterHandler;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSubscriptionRepository(SubscriptionRepository subscriptionRepository) {
+        this.subscriptionRepository = subscriptionRepository;
+    }
+
     @Override
     public Runnable create(String supplierCode, String queueName, SupplierWorkerManager manager) {
         DeliveryWorker worker = new DeliveryWorker(
@@ -61,6 +70,7 @@ public class DeliveryWorkerFactoryImpl implements SupplierWorkerManager.Delivery
                 metricsRegistry);
         worker.setAuditLogger(auditLogger);
         worker.setDeadLetterHandler(deadLetterHandler);
+        worker.setSubscriptionRepository(subscriptionRepository);
         return worker;
     }
 }

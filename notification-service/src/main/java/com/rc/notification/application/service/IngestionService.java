@@ -144,6 +144,76 @@ public class IngestionService {
     }
 
     /**
+     * 为单个订阅方执行入队（供 v2 fan-out 调用）
+     * 幂等 key 粒度：eventId:subscriberCode
+     *
+     * @return dispatch status: "QUEUED" / "IDEMPOTENT_HIT" / "DEAD_LETTERED"
+     */
+    public String enqueueForSubscriber(String eventId, String subscriberCode, String eventTypeCode,
+                                        Map<String, Object> payload, String traceId) {
+        String dispatchId = eventId + ":" + subscriberCode;
+        String lockKey = LOCK_PREFIX + dispatchId;
+        String statusKey = STATUS_PREFIX + dispatchId;
+
+        RLock lock = redissonClient.getLock(lockKey);
+        try {
+            boolean acquired = lock.tryLock(0, LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+            if (!acquired) {
+                return "IDEMPOTENT_HIT";
+            }
+            try {
+                var bucket = redissonClient.getBucket(statusKey);
+                Object currentStatus = bucket.get();
+                if (currentStatus != null) {
+                    String statusStr = currentStatus.toString();
+                    log.info("幂等命中(v2): dispatchId={}, currentStatus={}", dispatchId, statusStr);
+                    metricsRegistry.recordIngest(subscriberCode, "idempotent_hit");
+                    return statusStr.equals(STATUS_DEAD_LETTERED) ? "DEAD_LETTERED" : "IDEMPOTENT_HIT";
+                }
+
+                bucket.set(STATUS_PROCESSING, Duration.ofHours(STATUS_TTL_HOURS));
+
+                String queueName = QUEUE_PREFIX + subscriberCode;
+                RQueue<String> queue = redissonClient.getQueue(queueName);
+                String message = serializeV2Event(eventId, subscriberCode, eventTypeCode, payload, traceId);
+                try {
+                    queue.add(message);
+                } catch (Exception e) {
+                    bucket.delete();
+                    throw e;
+                }
+
+                log.info("事件入队成功(v2): dispatchId={}, eventType={}", dispatchId, eventTypeCode);
+                metricsRegistry.recordIngest(subscriberCode, "accepted");
+                return "QUEUED";
+            } finally {
+                if (lock.isHeldByCurrentThread()) lock.unlock();
+            }
+        } catch (RedisException e) {
+            throw new RedisUnavailableException("Redis 不可用", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RedisUnavailableException("获取锁被中断", e);
+        }
+    }
+
+    private String serializeV2Event(String eventId, String subscriberCode, String eventTypeCode,
+                                     Map<String, Object> payload, String traceId) {
+        try {
+            Map<String, Object> eventMap = new HashMap<>();
+            eventMap.put("eventId", eventId);
+            eventMap.put("traceId", traceId);
+            eventMap.put("supplierCode", subscriberCode);
+            eventMap.put("eventTypeCode", eventTypeCode);
+            eventMap.put("payload", payload);
+            eventMap.put("timestamp", System.currentTimeMillis());
+            return objectMapper.writeValueAsString(eventMap);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("事件序列化失败", e);
+        }
+    }
+
+    /**
      * 序列化事件为 JSON 字符串（用于队列存储）
      */
     private String serializeEvent(NotificationEventDto eventDto) {

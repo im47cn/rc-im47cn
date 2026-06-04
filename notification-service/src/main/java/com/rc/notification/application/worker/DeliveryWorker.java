@@ -4,6 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rc.notification.application.service.IngestionService;
 import com.rc.notification.domain.config.SupplierConfigDomainService;
+import com.rc.notification.domain.subscription.EffectiveConfig;
+import com.rc.notification.domain.subscription.EffectiveConfigResolver;
+import com.rc.notification.domain.subscription.Subscription;
+import com.rc.notification.domain.subscription.SubscriptionRepository;
 import com.rc.notification.domain.translation.TranslationEngineException;
 import com.rc.notification.infrastructure.http.FullStackHttpRequestBuilder;
 import com.rc.notification.infrastructure.metrics.NotificationMetricsRegistry;
@@ -53,6 +57,9 @@ public class DeliveryWorker implements Runnable {
     /** 死信服务接口（T11 实现后注入） */
     private DeadLetterHandler deadLetterHandler;
 
+    /** 订阅关系仓储（v2 配置合并，v1 兼容为 null） */
+    private SubscriptionRepository subscriptionRepository;
+
     public DeliveryWorker(String supplierCode,
                           String queueName,
                           SupplierWorkerManager workerManager,
@@ -79,6 +86,10 @@ public class DeliveryWorker implements Runnable {
 
     public void setDeadLetterHandler(DeadLetterHandler deadLetterHandler) {
         this.deadLetterHandler = deadLetterHandler;
+    }
+
+    public void setSubscriptionRepository(SubscriptionRepository subscriptionRepository) {
+        this.subscriptionRepository = subscriptionRepository;
     }
 
     @Override
@@ -138,20 +149,36 @@ public class DeliveryWorker implements Runnable {
             bizSign = (String) eventMeta.get("eventId");
             traceId = (String) eventMeta.get("traceId");
             retryCount = eventMeta.containsKey("retryCount") ? ((Number) eventMeta.get("retryCount")).intValue() : 0;
+            String eventTypeCode = (String) eventMeta.get("eventTypeCode");
 
             // 检查幂等状态（SUCCESS 状态直接丢弃）
-            var statusBucket = redissonClient.getBucket(STATUS_PREFIX + bizSign);
+            // v2 消息使用 per-subscriber 粒度的 key，v1 使用原有 key
+            String statusKey = STATUS_PREFIX + bizSign;
+            if (eventTypeCode != null) {
+                statusKey = STATUS_PREFIX + bizSign + ":" + supplierCode;
+            }
+            var statusBucket = redissonClient.getBucket(statusKey);
             Object currentStatus = statusBucket.get();
             if (currentStatus != null && IngestionService.STATUS_SUCCESS.equals(currentStatus.toString())) {
                 log.info("事件已成功投递，跳过长尾幽灵重试: bizSign={}", bizSign);
                 return;
             }
 
-            // 获取供应商配置
-            SupplierConfig config = configDomainService.getBySupplierCode(supplierCode);
-            if (config == null || config.getStatus() == null || config.getStatus() != 1) {
-                log.warn("供应商配置不存在或已禁用，跳过: supplierCode={}", supplierCode);
+            // 解析有效配置（v2 订阅合并，v1 直接使用 base config）
+            SupplierConfig baseConfig = configDomainService.getBySupplierCode(supplierCode);
+            if (baseConfig == null || baseConfig.getStatus() == null || baseConfig.getStatus() != 1) {
+                log.warn("订阅方配置不存在或已禁用，跳过: supplierCode={}", supplierCode);
                 return;
+            }
+
+            SupplierConfig config;
+            if (eventTypeCode != null && subscriptionRepository != null) {
+                Subscription sub = subscriptionRepository.findBySubscriberAndEventType(supplierCode, eventTypeCode);
+                EffectiveConfig effectiveConfig = EffectiveConfigResolver.resolve(baseConfig, sub);
+                config = effectiveConfig.toSupplierConfigCompat();
+            } else {
+                // v1 兼容：无 eventTypeCode，直接使用 base config
+                config = baseConfig;
             }
 
             // 构建 UnifiedInputContext
