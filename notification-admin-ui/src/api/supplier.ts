@@ -10,6 +10,11 @@ export function getSupplier(id: number) {
   return request.get(`/api/v1/admin/suppliers/${id}`)
 }
 
+/** 按供应商编码查询配置 */
+export function getSupplierByCode(code: string) {
+  return request.get(`/api/v1/admin/suppliers/by-code/${code}`)
+}
+
 /** 新增供应商 */
 export function createSupplier(data: Record<string, unknown>) {
   return request.post('/api/v1/admin/suppliers', data)

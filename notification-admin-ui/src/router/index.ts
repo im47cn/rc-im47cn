@@ -9,6 +9,30 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/LoginView.vue'),
     meta: { requiresAuth: false }
   },
+  // 发布方管理
+  {
+    path: '/publishers',
+    name: 'PublisherList',
+    component: () => import('../views/PublisherListView.vue')
+  },
+  // 事件类型管理
+  {
+    path: '/event-types',
+    name: 'EventTypeList',
+    component: () => import('../views/EventTypeListView.vue')
+  },
+  {
+    path: '/event-types/:id',
+    name: 'EventTypeDetail',
+    component: () => import('../views/EventTypeDetailView.vue')
+  },
+  // 订阅关系管理
+  {
+    path: '/subscriptions',
+    name: 'SubscriptionList',
+    component: () => import('../views/SubscriptionListView.vue')
+  },
+  // 订阅方（原供应商）管理
   {
     path: '/suppliers',
     name: 'SupplierList',
@@ -29,6 +53,7 @@ const routes: RouteRecordRaw[] = [
     name: 'SupplierSimulate',
     component: () => import('../views/SimulationView.vue')
   },
+  // 死信队列
   {
     path: '/dlq',
     name: 'DlqList',
@@ -36,7 +61,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/',
-    redirect: '/suppliers'
+    redirect: '/publishers'
   }
 ]
 

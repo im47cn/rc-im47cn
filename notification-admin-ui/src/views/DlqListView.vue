@@ -158,7 +158,7 @@ onMounted(fetchList)
       <div class="filter-bar">
         <el-input
           v-model="supplierCode"
-          placeholder="供应商编码"
+          placeholder="订阅方编码"
           clearable
           style="width: 200px"
           @keyup.enter="handleSearch"
@@ -193,7 +193,7 @@ onMounted(fetchList)
         <el-table-column label="链路ID" width="180" show-overflow-tooltip>
           <template #default="{ row }">{{ getField(row, 'traceId', 'trace_id') }}</template>
         </el-table-column>
-        <el-table-column label="供应商" width="130">
+        <el-table-column label="订阅方" width="130">
           <template #default="{ row }">{{ getField(row, 'supplierCode', 'supplier_code') }}</template>
         </el-table-column>
         <el-table-column label="错误信息" min-width="200">

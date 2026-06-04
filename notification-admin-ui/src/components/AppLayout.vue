@@ -30,9 +30,21 @@ async function handleLogout() {
         text-color="#bfcbd9"
         active-text-color="#409EFF"
       >
+        <el-menu-item index="/publishers">
+          <el-icon><Promotion /></el-icon>
+          <span>发布方管理</span>
+        </el-menu-item>
+        <el-menu-item index="/event-types">
+          <el-icon><Collection /></el-icon>
+          <span>事件类型管理</span>
+        </el-menu-item>
+        <el-menu-item index="/subscriptions">
+          <el-icon><Connection /></el-icon>
+          <span>订阅关系管理</span>
+        </el-menu-item>
         <el-menu-item index="/suppliers">
           <el-icon><Setting /></el-icon>
-          <span>供应商管理</span>
+          <span>订阅方管理</span>
         </el-menu-item>
         <el-menu-item index="/dlq">
           <el-icon><Warning /></el-icon>

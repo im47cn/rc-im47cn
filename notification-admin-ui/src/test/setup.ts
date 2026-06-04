@@ -33,8 +33,14 @@ config.global.stubs = {
   ElSwitch: { template: '<input type="checkbox" />', props: ['modelValue'] },
   ElAlert: { template: '<div><slot /></div>', props: ['title', 'type'] },
   ElTooltip: { template: '<div><slot /></div>', props: ['content'] },
+  ElDialog: { template: '<div><slot /></div>', props: ['modelValue', 'title', 'width'] },
+  ElCollapse: { template: '<div><slot /></div>', props: ['modelValue'] },
+  ElCollapseItem: { template: '<div><slot /></div>', props: ['title', 'name'] },
   Setting: { template: '<span />' },
-  Warning: { template: '<span />' }
+  Warning: { template: '<span />' },
+  Promotion: { template: '<span />' },
+  Collection: { template: '<span />' },
+  Connection: { template: '<span />' }
 }
 
 // Mock ElMessage / ElMessageBox
